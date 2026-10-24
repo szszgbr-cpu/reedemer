@@ -383,7 +383,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB trigger capture / v5"
+subLabel.Text = "SAB trigger capture / v7"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -436,7 +436,7 @@ modeButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 modeButton.BackgroundTransparency = 0.35
 modeButton.BorderSizePixel = 0
 modeButton.Font = Enum.Font.GothamBold
-modeButton.Text = "USE CODE / CODE IS -> MAX 3 PARTS"
+modeButton.Text = "RIDDLE ANSWER: OFF (CLICK TO START)"
 modeButton.TextColor3 = Color3.fromRGB(80, 85, 95)
 modeButton.TextSize = 9
 modeButton.AutoButtonColor = false
@@ -696,6 +696,8 @@ end
 connect(checkButton.MouseButton1Click, checkUi)
 
 local scanning, busy, processing = false, false, false
+local manualWatching, manualCount = false, 0
+local submittedAnswers = {}
 local generation = 0
 state.captureGeneration = generation
 local MAX_PARTS = 3
@@ -724,7 +726,8 @@ local function advanceGeneration()
     state.captureGeneration = generation
 end
 local function pauseScan(message)
-    scanning, collecting = false, false
+    scanning, collecting, manualWatching = false, false, false
+    modeButton.Text = "RIDDLE ANSWER: OFF (CLICK TO START)"
     advanceGeneration()
     submissionQueue = {}
     scanButton.Text = "START SCAN"
@@ -746,18 +749,26 @@ local function processBuffer()
                 local item = table.remove(submissionQueue, 1)
                 if item.generation == token then
                     busy = true
-                    local submitted, message = typeAndSubmitCode(item.code, token)
+                    local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token)
+                    if not callOk then message, submitted = tostring(submitted), false end
                     busy = false
                     if not state.alive or token ~= generation then break end
                     if not submitted then
                         -- Keep the MOST COMPLETE captured value for manual retry.
                         updatePreview()
-                        pauseScan(message)
-                        break
+                        if manualWatching then
+                            setStatus("RIDDLE ANSWER: submit failed; still watching. " .. message, true)
+                        else
+                            pauseScan(message)
+                            break
+                        end
                     end
                     nextSubmitAt = os.clock() + delay
-                    local tail = collecting and "waiting for next part" or "waiting for USE CODE / CODE IS"
-                    setStatus("Part " .. item.part .. ": submit attempted; " .. tail .. ".")
+                    if submitted then
+                        local tail = manualWatching and "manual watch continues"
+                            or (collecting and "waiting for next part" or "waiting for USE CODE / CODE IS")
+                        setStatus("Message " .. item.part .. ": submit attempted; " .. tail .. ".")
+                    end
                 end
             end
         end
@@ -788,11 +799,15 @@ local function normalizeMessage(value)
     if #message < 1 or #message > 96 or not message:match("^[A-Za-z0-9_%-]+$") then return nil end
     return message
 end
-local function onAnnouncement(value, source)
+local function onAnnouncement(value, source, explicitAnswer)
     if not scanning or not state.alive then return end
-    local trigger = isTrigger(value)
-    local message = trigger and cleanMessage(value):lower():gsub("%s+", " ") or normalizeMessage(value)
-    if not message or (not trigger and not collecting) then return end
+    -- UI text and ordinary message strings are never answers in riddle mode.
+    if manualWatching and not explicitAnswer then return end
+    local trigger = not manualWatching and isTrigger(value)
+    local message
+    if manualWatching then message = cleanMessage(value)
+    else message = trigger and cleanMessage(value):lower():gsub("%s+", " ") or normalizeMessage(value) end
+    if not message or message == "" or (not manualWatching and not trigger and not collecting) then return end
     local now = os.clock()
     local previous = recent[message]
     -- A UI mirror must not restart a round or add the same fragment twice.
@@ -801,6 +816,17 @@ local function onAnnouncement(value, source)
     recent[message] = {source = source, time = now}
     for key, entry in pairs(recent) do
         if now - entry.time > 2 then recent[key] = nil end
+    end
+    if manualWatching then
+        if submittedAnswers[message] then return end
+        submittedAnswers[message] = true
+        manualCount = manualCount + 1
+        lastCode = message
+        updatePreview()
+        table.insert(submissionQueue, {code = message, part = manualCount, generation = generation})
+        setStatus("RIDDLE ANSWER: received explicit answer " .. manualCount .. ". Queued for submission.")
+        task.defer(processBuffer)
+        return
     end
     if trigger then
         advanceGeneration()
@@ -842,11 +868,60 @@ local function payloadText(value, depth)
     end
     return payloadText(value[1], depth + 1)
 end
+-- Only inspect explicit answer fields in received notification payloads.
+-- Never interpret question/message text, positional strings, or statusCode as answers.
+local answerKeys = {answer = true, solution = true, code = true,
+    riddleanswer = true, riddle_answer = true, redeemcode = true, redeem_code = true}
+local function extractExplicitAnswer(...)
+    local seen, answers, paths = {}, {}, {}
+    local nodes, fields, exhausted = 0, 0, false
+    local function visit(value, path, depth)
+        if type(value) ~= "table" or seen[value] then return end
+        if depth > 6 or nodes >= 128 then exhausted = true; return end
+        seen[value] = true
+        nodes = nodes + 1
+        for key, child in pairs(value) do
+            fields = fields + 1
+            if fields > 512 then exhausted = true; return end
+            local keyText = type(key) == "string" and key or tostring(key)
+            local childPath = path .. "." .. keyText
+            if type(key) == "string" and answerKeys[key:lower()] then
+                if type(child) == "string" then
+                    local candidate = cleanMessage(child)
+                    if candidate and #candidate > 0 and #candidate <= 96
+                        and candidate:match("^[A-Za-z0-9_%-]+$") then
+                        answers[candidate] = true
+                        paths[candidate] = childPath
+                    end
+                end
+            end
+            if type(child) == "table" then visit(child, childPath, depth + 1) end
+        end
+    end
+    for i = 1, select("#", ...) do visit(select(i, ...), "arg" .. i, 0) end
+    if exhausted then return nil, "payload exceeds inspection limit" end
+    local answer, count = nil, 0
+    for candidate in pairs(answers) do answer, count = candidate, count + 1 end
+    if count > 1 then return nil, "multiple different answer fields; not submitted" end
+    if answer then return answer, paths[answer] end
+    return nil, "no explicit answer/code field in received notification"
+end
 local function watchRemote(remote)
     if not state.alive then return end
     if state.remotes[remote] or not isNotificationRemote(remote) then return end
     state.remotes[remote] = true
     connect(remote.OnClientEvent, function(...)
+        if scanning and manualWatching then
+            local answer, detail = extractExplicitAnswer(...)
+            if answer then
+                if submittedAnswers[answer] then return end
+                print("[Sources Hub] Explicit answer field: " .. detail .. " on " .. remote:GetFullName())
+                onAnnouncement(answer, "remote:" .. remote:GetFullName(), true)
+            else
+                setStatus("RIDDLE ANSWER: " .. detail .. ". Still watching.")
+            end
+            return
+        end
         for i = 1, select("#", ...) do
             local message = payloadText(select(i, ...), 0)
             if message and (isTrigger(message) or normalizeMessage(message)) then
@@ -919,7 +994,29 @@ local function sourceSummary()
     for _ in pairs(state.labels) do labelCount = labelCount + 1 end
     return remoteCount, labelCount
 end
+connect(modeButton.MouseButton1Click, function()
+    local enable = not manualWatching
+    advanceGeneration()
+    scanning, manualWatching, collecting = enable, enable, false
+    fragments, submissionQueue, recent = {}, {}, {}
+    manualCount = 0
+    submittedAnswers = {}
+    for _, labelState in pairs(state.labels) do labelState.pending = false end
+    modeButton.Text = enable and "RIDDLE ANSWER: ON (CLICK TO STOP)" or "RIDDLE ANSWER: OFF (CLICK TO START)"
+    scanButton.Text = enable and "STOP WATCH" or "START SCAN"
+    statusDot.BackgroundColor3 = enable and Color3.fromRGB(50, 200, 80) or Color3.fromRGB(220, 40, 50)
+    if enable then
+        lastCode = ""
+        updatePreview()
+        setStatus("RIDDLE ANSWER: waiting for an explicit answer/solution/code field in notification data. Question text is ignored.")
+    else
+        setStatus("Manual watch stopped. Pending submissions cancelled.")
+    end
+end)
 connect(scanButton.MouseButton1Click, function()
+    manualWatching = false
+    modeButton.Text = "RIDDLE ANSWER: OFF (CLICK TO START)"
+    for _, labelState in pairs(state.labels) do labelState.pending = false end
     scanning = not scanning
     advanceGeneration()
     collecting = false
@@ -975,4 +1072,4 @@ if type(identifyexecutor) == "function" then
 end
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready. START SCAN waits for USE CODE / CODE IS, then captures up to 3 parts.")
+setStatus("Ready. START SCAN: trigger + 3 parts. RIDDLE ANSWER: explicit answer fields only.")
