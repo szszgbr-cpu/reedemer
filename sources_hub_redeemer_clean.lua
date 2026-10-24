@@ -163,16 +163,37 @@ local function clickButton(button)
     if not activated and not clicked then return dispatchSignal(button.MouseButton1Click) end
     return false
 end
+local function visibleSubmitText(button)
+    local texts = {}
+    local function add(item)
+        if (item:IsA("TextLabel") or item:IsA("TextButton")) and isVisibleChain(item) then
+            table.insert(texts, (item.Text:gsub("<[^>]*>", "")):lower())
+        end
+    end
+    add(button)
+    for _, item in ipairs(button:GetDescendants()) do add(item) end
+    -- Some UI layouts put a transparent click target beside its caption.
+    -- Only accept sibling captions whose centre lies inside this button.
+    if button.Parent and button.Parent:IsA("GuiObject") then
+        for _, item in ipairs(button.Parent:GetChildren()) do
+            if item:IsA("TextLabel") then
+                local centre = item.AbsolutePosition + item.AbsoluteSize / 2
+                local pos, size = button.AbsolutePosition, button.AbsoluteSize
+                if centre.X >= pos.X and centre.X <= pos.X + size.X
+                    and centre.Y >= pos.Y and centre.Y <= pos.Y + size.Y then add(item) end
+            end
+        end
+    end
+    return texts
+end
 local function submitScore(button)
     local name = button.Name:lower()
     if name:find("close", 1, true) or name == "x" or name:find("cancel", 1, true) then return 0 end
-    local text = ""
-    if button:IsA("TextButton") then text = button.Text end
-    for _, child in ipairs(button:GetDescendants()) do
-        if child:IsA("TextLabel") then text = text .. " " .. child.Text end
+    local texts = visibleSubmitText(button)
+    for _, text in ipairs(texts) do
+        if text:match("^%s*submit%s*$") then return 40 end
     end
-    text = text:lower()
-    if text:match("^%s*submit%s*$") then return 40 end
+    local text = table.concat(texts, " ")
     for _, word in ipairs({"redeem", "submit", "claim", "confirm"}) do
         if name:find(word, 1, true) or text:find(word, 1, true) then return 20 end
     end
@@ -180,13 +201,17 @@ local function submitScore(button)
     return 0
 end
 local function findSubmitButton(box)
+    lastUiError = nil
     if box == boundBox and usableGui(boundButton) then return boundButton end
     local parent = box.Parent
     while parent and parent ~= PlayerGui do
         local best, score, tied = nil, 0, false
         for _, child in ipairs(parent:GetDescendants()) do
-            if child:IsA("GuiButton") and not isOurGui(child) and isVisibleChain(child) then
+            if child:IsA("GuiButton") and not isOurGui(child) and usableGui(child) then
                 local candidate = submitScore(child)
+                -- At the screen boundary require an exact Submit caption;
+                -- unrelated generic Claim/Send controls must not be selected.
+                if parent:IsA("ScreenGui") and candidate < 40 then candidate = 0 end
                 if candidate > score then best, score, tied = child, candidate, false
                 elseif candidate > 0 and candidate == score then tied = true end
             end
@@ -196,10 +221,12 @@ local function findSubmitButton(box)
             return nil
         end
         if best then return best end
-        -- Do not search unrelated screens for a generic Send/Claim button.
-        if parent:IsA("ScreenGui") or hasCodeWord(parent.Name) then break end
+        -- A CodeInput wrapper is not necessarily the entire Codes panel.
+        -- Continue to its ancestors, but never leave this ScreenGui.
+        if parent:IsA("ScreenGui") then break end
         parent = parent.Parent
     end
+    lastUiError = "CHECK UI: Submit not identified. Field: " .. box:GetFullName()
 end
 local function openCodesPanel()
     -- Use the game's own open button rather than changing visibility behind its controller.
@@ -356,7 +383,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB trigger capture / v4"
+subLabel.Text = "SAB trigger capture / v5"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
