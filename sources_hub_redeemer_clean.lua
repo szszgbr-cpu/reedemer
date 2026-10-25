@@ -24,6 +24,238 @@ local old = env[SESSION_KEY]
 if type(old) == "table" and type(old.cleanup) == "function" then pcall(old.cleanup) end
 local state = {alive = true, connections = {}, remotes = {}, labels = {}}
 env[SESSION_KEY] = state
+-- Diagnostic storage only. This block never selects or submits a code.
+local diagnostics = {}
+local logLabel
+local logMemory = {}
+local logPath
+local function refreshLogLabel() if diagnostics.refresh then diagnostics.refresh() end end
+local function audit(event, fields, at)
+    if diagnostics.record then return diagnostics.record(event, fields, at) end
+end
+do
+    local http = game:GetService("HttpService")
+    local session = os.date("!%Y%m%dT%H%M%SZ") .. "_" .. http:GenerateGUID(false):sub(1, 8)
+    local base = "SourcesHub_" .. session
+    local writer, appender, reader = writefile, appendfile, readfile
+    local sequence, pending, pendingBytes, memoryBytes = 0, {}, 0, 0
+    local part, partBytes, partBuffer, created = 1, 0, "", false
+    local saved, dropped, encodingErrors, pendingDropped = 0, 0, 0, 0
+    local disk = type(writer) == "function"
+    local failure = not disk and "writefile unavailable" or nil
+    local files = {}
+    local flushing = false
+    logPath = base .. "_1.jsonl"
+    env.SourcesHubRedeemerLastLog = logMemory
+    local info = {version = "v9", session = session, files = files}
+    env.SourcesHubRedeemerLogInfo = info
+
+    function diagnostics.refresh()
+        info.path, info.file_logging, info.saved = logPath, disk, saved
+        info.error, info.dropped, info.encoding_errors = failure, dropped, encodingErrors
+        if logLabel and state.alive then
+            local prefix = disk and (saved > 0 and "LOG FILE: " or "LOG BUFFERED: ") or "LOG NOT SAVED: "
+            local detail = disk and logPath or tostring(failure)
+            local gaps = dropped + encodingErrors > 0 and " | GAPS: " .. (dropped + encodingErrors) or ""
+            logLabel.Text = prefix .. detail .. gaps .. " | click to copy log"
+            logLabel.TextColor3 = disk and Color3.fromRGB(40, 100, 60) or Color3.fromRGB(170, 30, 40)
+        end
+    end
+
+    function diagnostics.record(event, fields, at)
+        local ok, id = pcall(function()
+            sequence = sequence + 1
+            local now = at or os.clock()
+            local record = {schema = 2, utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                elapsed = now - start, session = session, sequence = sequence,
+                event = event, data = fields or {}}
+            -- Bound pending memory even when incoming messages outrun disk writes.
+            local estimate = event == "remote_received" and 65536 or 8192
+            if #pending >= 512 or pendingBytes + estimate > 2097152 then
+                dropped, pendingDropped = dropped + 1, pendingDropped + 1
+            else
+                pending[#pending + 1] = record
+                pendingBytes = pendingBytes + estimate
+            end
+            return sequence
+        end)
+        if ok then return id end
+        encodingErrors = encodingErrors + 1
+        return nil
+    end
+
+    local function remember(line)
+        logMemory[#logMemory + 1] = line
+        memoryBytes = memoryBytes + #line
+        while #logMemory > 500 or memoryBytes > 1048576 do
+            memoryBytes = memoryBytes - #table.remove(logMemory, 1)
+        end
+    end
+    local function saveBatch(lines)
+        if #lines == 0 or not disk then return end
+        local text = table.concat(lines, "")
+        if not created then
+            writer(logPath, "")
+            files[#files + 1] = logPath
+            created = true
+        end
+        if type(appender) == "function" then appender(logPath, text)
+        else
+            partBuffer = partBuffer .. text
+            writer(logPath, partBuffer)
+        end
+        partBytes = partBytes + #text
+        saved = saved + #lines
+    end
+
+    function diagnostics.flush()
+        if flushing then return false end
+        flushing = true
+        local batch = pending
+        pending, pendingBytes = {}, 0
+        local ok, err = pcall(function()
+            if pendingDropped > 0 then
+                table.insert(batch, {schema = 2, session = session, event = "diagnostic_gap",
+                    elapsed = os.clock() - start, data = {dropped_records = pendingDropped}})
+                pendingDropped = 0
+            end
+            local lines, bytes = {}, 0
+            for _, record in ipairs(batch) do
+                local encoded, line = pcall(function() return http:JSONEncode(record) .. "\n" end)
+                if encoded then
+                    remember(line)
+                    if disk then
+                        if partBytes + bytes + #line > 1048576 then
+                            local writeOk, writeErr = pcall(saveBatch, lines)
+                            if not writeOk then disk, failure = false, tostring(writeErr) end
+                            lines, bytes = {}, 0
+                            if disk then
+                                part, partBytes, partBuffer, created = part + 1, 0, "", false
+                                logPath = base .. "_" .. part .. ".jsonl"
+                            end
+                        end
+                        if disk then lines[#lines + 1], bytes = line, bytes + #line end
+                    end
+                else
+                    encodingErrors = encodingErrors + 1
+                    warn("[Sources Hub] Diagnostic encoding failed: " .. tostring(line))
+                end
+            end
+            if disk then
+                local writeOk, writeErr = pcall(saveBatch, lines)
+                if not writeOk then disk, failure = false, tostring(writeErr) end
+            end
+        end)
+        if not ok then disk, failure = false, tostring(err) end
+        flushing = false
+        diagnostics.refresh()
+        return ok and disk
+    end
+
+    -- Snapshot typed parameters before message selection, with explicit cut markers.
+    function diagnostics.snapshot(...)
+        local seen, nodes, entries, stringBytes = {}, 0, 0, 0
+        local cuts = {}
+        local function cut(reason)
+            cuts[reason] = true
+            return {kind = "omitted", reason = reason}
+        end
+        local function text(value)
+            local available = math.max(0, math.min(4096, 32768 - stringBytes))
+            local prefix = value:sub(1, available)
+            local valid, length = pcall(utf8.len, prefix)
+            if not valid or not length then
+                -- Preserve binary/partial UTF-8 as hex instead of breaking JSON.
+                prefix = prefix:gsub(".", function(c) return string.format("%02x", string.byte(c)) end)
+                stringBytes = stringBytes + math.min(#value, available)
+                if #value > available then cuts.string_limit = true end
+                return {kind = "string", encoding = "hex", value = prefix,
+                    original_bytes = #value, truncated = #value > available}
+            end
+            stringBytes = stringBytes + #prefix
+            if #value > #prefix then cuts.string_limit = true end
+            return {kind = "string", value = prefix, original_bytes = #value, truncated = #value > #prefix}
+        end
+        local visit
+        visit = function(value, depth)
+            local kind = type(value)
+            if kind == "nil" then return {kind = "nil"} end
+            if kind == "string" then return text(value) end
+            if kind == "boolean" then return {kind = kind, value = value} end
+            if kind == "number" then
+                return {kind = kind, value = value == value and value > -math.huge and value < math.huge
+                    and value or tostring(value)}
+            end
+            if kind ~= "table" then return {kind = typeof(value), value = text(tostring(value))} end
+            if seen[value] then return {kind = "reference", id = seen[value]} end
+            if depth > 6 then return cut("depth_limit") end
+            if nodes >= 128 then return cut("node_limit") end
+            nodes = nodes + 1
+            seen[value] = nodes
+            local result = {kind = "table", id = nodes, entries = {}}
+            for key, child in next, value do
+                if entries >= 512 then result.omitted = "entry_limit"; cuts.entry_limit = true; break end
+                entries = entries + 1
+                local keyRecord = type(key) == "string" and text(key)
+                    or {kind = type(key), value = tostring(key)}
+                result.entries[#result.entries + 1] = {key = keyRecord, value = visit(child, depth + 1)}
+            end
+            return result
+        end
+        local result = {argument_count = select("#", ...), arguments = {}, cuts = cuts,
+            limits = {depth = 6, nodes = 128, entries = 512, string_bytes = 32768, string_length = 4096}}
+        for i = 1, math.min(result.argument_count, 32) do
+            result.arguments[i] = visit(select(i, ...), 0)
+        end
+        if result.argument_count > 32 then cuts.argument_limit = true end
+        return result
+    end
+
+    function diagnostics.remote(source, active, mode, ...)
+        local at = os.clock()
+        local ok, snapshot = pcall(diagnostics.snapshot, ...)
+        return audit("remote_received", {source = source, scan_active = active, mode = mode,
+            payload = ok and snapshot or {snapshot_error = tostring(snapshot)}}, at)
+    end
+    function diagnostics.gui(label, reason, visible, at)
+        local ok, snapshot = pcall(diagnostics.snapshot, label.Text)
+        return audit("gui_observed", {source = "gui:" .. label:GetFullName(), reason = reason,
+            visible = visible, payload = ok and snapshot or {snapshot_error = tostring(snapshot)}}, at)
+    end
+
+    function diagnostics.copy()
+        diagnostics.flush()
+        if type(setclipboard) ~= "function" then return false, "Clipboard unavailable; log: " .. logPath end
+        if disk and type(reader) == "function" then
+            local chunks, bytes = {}, 0
+            for _, path in ipairs(files) do
+                local ok, chunk = pcall(reader, path)
+                if not ok then return false, "Cannot read " .. path .. "; keep all session files." end
+                bytes = bytes + #chunk
+                if bytes > 16777216 then return false, "Log exceeds clipboard limit; keep all " .. base .. "_*.jsonl files." end
+                chunks[#chunks + 1] = chunk
+            end
+            local ok, err = pcall(setclipboard, table.concat(chunks, ""))
+            return ok, ok and "Copied saved session log. Keep it for event analysis." or tostring(err)
+        end
+        local ok, err = pcall(setclipboard, table.concat(logMemory, ""))
+        return ok, ok and "Copied RECENT MEMORY ONLY (max 500 entries / 1 MB); saved files may contain more." or tostring(err)
+    end
+
+    audit("session_start", {version = "v9", file = logPath, file_logging = disk,
+        scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
+        capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
+        note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
+        file_rotation_bytes = 1048576, flush_seconds = 0.5})
+    diagnostics.flush()
+    task.spawn(function()
+        while state.alive do
+            task.wait(0.5)
+            diagnostics.flush()
+        end
+    end)
+end
+
 local screenGui
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -32,6 +264,8 @@ local function connect(signal, callback)
 end
 function state.cleanup()
     if not state.alive then return end
+    audit("session_stop", {})
+    diagnostics.flush()
     state.alive = false
     for _, connection in ipairs(state.connections) do pcall(function() connection:Disconnect() end) end
     state.connections = {}
@@ -269,6 +503,7 @@ local function typeAndSubmitCode(code, requestToken)
     if button then
         -- A focus change is not an Enter submission when a submit button exists.
         if focused then pcall(function() box:ReleaseFocus(false) end) end
+        audit("ui_submit_dispatch", {code = code, button = button:GetFullName(), generation = requestToken})
         if clickButton(button) then return true, "Submit attempted; check the game's result." end
         return false, "Code filled. Click the game's redeem button manually." 
     end
@@ -279,6 +514,7 @@ local function typeAndSubmitCode(code, requestToken)
             if released then return true, "Enter submitted; check the game's result." end
         end
     end
+    audit("ui_enter_dispatch", {code = code, field = box:GetFullName(), generation = requestToken})
     if dispatchSignal(box.FocusLost, true, nil) then return true, "Enter attempted; check the game's result." end
     return false, "Code filled. Press Enter in the game's code field manually."
 end
@@ -330,7 +566,7 @@ screenGui.Parent = PlayerGui
 -- Main Container (Translucent White)
 local mainFrame = Instance.new("ImageLabel")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 340, 0, 306)
+mainFrame.Size = UDim2.new(0, 340, 0, 346)
 mainFrame.Position = UDim2.new(0.5, -170, 0.5, -153)
 mainFrame.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
 mainFrame.BackgroundTransparency = 0.1
@@ -383,7 +619,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB trigger capture / v7"
+subLabel.Text = "SAB trigger capture / v9 logs"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -645,11 +881,26 @@ statusLabel.TextYAlignment = Enum.TextYAlignment.Top
 statusLabel.Parent = mainFrame
 setStatus = function(message, isError)
     if not state.alive then return end
+    audit("status", {message = message, is_error = isError == true})
     statusLabel.Text = message
     statusLabel.TextColor3 = isError and Color3.fromRGB(170, 30, 40) or Color3.fromRGB(50, 65, 80)
     if isError then warn("[Sources Hub] " .. message) else print("[Sources Hub] " .. message) end
 end
 
+logLabel = Instance.new("TextButton")
+logLabel.Name = "LogStatus"
+logLabel.Position = UDim2.new(0, 12, 0, 294)
+logLabel.Size = UDim2.new(1, -24, 0, 42)
+logLabel.BackgroundTransparency = 1
+logLabel.Font = Enum.Font.Gotham
+logLabel.TextSize = 10
+logLabel.TextWrapped = true
+logLabel.Parent = mainFrame
+refreshLogLabel()
+connect(logLabel.MouseButton1Click, function()
+    local ok, message = diagnostics.copy()
+    setStatus(message, not ok)
+end)
 local checkButton = Instance.new("TextButton")
 checkButton.Name = "CheckUI"
 checkButton.Position = UDim2.new(0, 12, 0, 200)
@@ -749,8 +1000,13 @@ local function processBuffer()
                 local item = table.remove(submissionQueue, 1)
                 if item.generation == token then
                     busy = true
+                    audit("submission_start", {code = item.code, source = item.source, part = item.part,
+                        generation = token, mode = manualWatching and "riddle" or "trigger", input_event = item.inputEventId, delay = delay})
                     local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token)
                     if not callOk then message, submitted = tostring(submitted), false end
+                    audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
+                        attempted = submitted == true, detail = message, reward_confirmed = false,
+                        cancelled = token ~= generation or not state.alive})
                     busy = false
                     if not state.alive or token ~= generation then break end
                     if not submitted then
@@ -799,10 +1055,11 @@ local function normalizeMessage(value)
     if #message < 1 or #message > 96 or not message:match("^[A-Za-z0-9_%-]+$") then return nil end
     return message
 end
-local function onAnnouncement(value, source, explicitAnswer)
+local function onAnnouncement(value, source, explicitAnswer, inputEventId)
     if not scanning or not state.alive then return end
     -- UI text and ordinary message strings are never answers in riddle mode.
     if manualWatching and not explicitAnswer then return end
+    audit("capture_input", {source = source, text = value, explicit_answer = explicitAnswer == true, input_event = inputEventId, generation = generation})
     local trigger = not manualWatching and isTrigger(value)
     local message
     if manualWatching then message = cleanMessage(value)
@@ -812,7 +1069,10 @@ local function onAnnouncement(value, source, explicitAnswer)
     local previous = recent[message]
     -- A UI mirror must not restart a round or add the same fragment twice.
     -- Repeated equal fragments on the SAME source are valid independent arrivals.
-    if previous and previous.source ~= source and now - previous.time < 0.75 then return end
+    if previous and previous.source ~= source and now - previous.time < 0.75 then
+        audit("duplicate_ignored", {source = source, text = message, previous_source = previous.source})
+        return
+    end
     recent[message] = {source = source, time = now}
     for key, entry in pairs(recent) do
         if now - entry.time > 2 then recent[key] = nil end
@@ -823,12 +1083,13 @@ local function onAnnouncement(value, source, explicitAnswer)
         manualCount = manualCount + 1
         lastCode = message
         updatePreview()
-        table.insert(submissionQueue, {code = message, part = manualCount, generation = generation})
+        table.insert(submissionQueue, {code = message, part = manualCount, generation = generation, source = source, inputEventId = inputEventId})
         setStatus("RIDDLE ANSWER: received explicit answer " .. manualCount .. ". Queued for submission.")
         task.defer(processBuffer)
         return
     end
     if trigger then
+        audit("trigger_received", {source = source, text = message})
         advanceGeneration()
         collecting = true
         fragments, submissionQueue = {}, {}
@@ -847,7 +1108,8 @@ local function onAnnouncement(value, source, explicitAnswer)
     local part = #fragments
     lastCode = table.concat(fragments, "")
     updatePreview()
-    table.insert(submissionQueue, {code = lastCode, part = part, generation = generation})
+    table.insert(submissionQueue, {code = lastCode, part = part, generation = generation, source = source, inputEventId = inputEventId})
+    audit("code_queued", {source = source, fragment = message, code = lastCode, part = part, input_event = inputEventId, generation = generation})
     print("[Sources Hub] Part " .. part .. " (" .. source .. "): " .. message .. " -> " .. lastCode)
     if part >= MAX_PARTS then
         collecting = false
@@ -911,12 +1173,17 @@ local function watchRemote(remote)
     if state.remotes[remote] or not isNotificationRemote(remote) then return end
     state.remotes[remote] = true
     connect(remote.OnClientEvent, function(...)
+        -- Observation precedes text extraction and never feeds back into it.
+        local inputEventId = diagnostics.remote("remote:" .. remote:GetFullName(), scanning,
+            manualWatching and "riddle" or "trigger", ...)
         if scanning and manualWatching then
             local answer, detail = extractExplicitAnswer(...)
+            audit("answer_inspection", {source = "remote:" .. remote:GetFullName(),
+                answer = answer, field_or_reason = detail, input_event = inputEventId})
             if answer then
                 if submittedAnswers[answer] then return end
                 print("[Sources Hub] Explicit answer field: " .. detail .. " on " .. remote:GetFullName())
-                onAnnouncement(answer, "remote:" .. remote:GetFullName(), true)
+                onAnnouncement(answer, "remote:" .. remote:GetFullName(), true, inputEventId)
             else
                 setStatus("RIDDLE ANSWER: " .. detail .. ". Still watching.")
             end
@@ -925,11 +1192,14 @@ local function watchRemote(remote)
         for i = 1, select("#", ...) do
             local message = payloadText(select(i, ...), 0)
             if message and (isTrigger(message) or normalizeMessage(message)) then
-                onAnnouncement(message, "remote:" .. remote:GetFullName())
+                audit("remote_text_selected", {source = "remote:" .. remote:GetFullName(),
+                    input_event = inputEventId, argument = i, text = message})
+                onAnnouncement(message, "remote:" .. remote:GetFullName(), false, inputEventId)
                 return
             end
         end
     end)
+    audit("source_attached", {source = "remote:" .. remote:GetFullName()})
     print("[Sources Hub] Listening: " .. remote:GetFullName())
 end
 local function announcementContext(instance)
@@ -947,6 +1217,7 @@ local function watchLabel(label, fresh)
     if not label:IsA("TextLabel") or isOurGui(label) or state.labels[label] then return end
     if not announcementContext(label) then return end
     local labelState = {pending = fresh == true}
+    diagnostics.gui(label, "source_attached", isVisibleChain(label), os.clock())
     state.labels[label] = labelState
     local lastText, lastTime = nil, -math.huge
     local function capture()
@@ -957,14 +1228,19 @@ local function watchLabel(label, fresh)
             local now = os.clock()
             if label.Text == lastText and now - lastTime < 0.75 then return end
             lastText, lastTime = label.Text, now
-            onAnnouncement(label.Text, "gui:" .. label:GetFullName())
+            local inputEventId = diagnostics.gui(label, "visible_delivery", true, now)
+            onAnnouncement(label.Text, "gui:" .. label:GetFullName(), false, inputEventId)
         end
     end
     connect(label:GetPropertyChangedSignal("Text"), function()
+        diagnostics.gui(label, "text_changed", isVisibleChain(label), os.clock())
         labelState.pending = true
         capture()
     end)
-    connect(label:GetPropertyChangedSignal("Visible"), capture)
+    connect(label:GetPropertyChangedSignal("Visible"), function()
+        diagnostics.gui(label, "visibility_changed", isVisibleChain(label), os.clock())
+        capture()
+    end)
     -- A reused notification may become visible through its parent frame.
     local parent = label.Parent
     while parent and parent ~= PlayerGui do
@@ -1042,7 +1318,10 @@ local function manualRedeem()
     if code == "" then setStatus("Enter a code first.", true); return end
     busy = true
     lastCode = code
+    audit("submission_start", {code = code, source = "manual", mode = "manual"})
     local ok, submitted, message = pcall(typeAndSubmitCode, code)
+    audit("submission_result", {code = code, source = "manual", attempted = ok and submitted == true,
+        detail = ok and message or tostring(submitted), reward_confirmed = false})
     nextSubmitAt = os.clock() + delay
     busy = false
     if state.alive then
