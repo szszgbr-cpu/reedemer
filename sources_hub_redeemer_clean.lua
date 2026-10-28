@@ -1,4 +1,4 @@
--- Sources Hub Redeemer - trigger-based cumulative capture, 2026-09-30.
+-- Sources Hub Redeemer - configurable complete-code capture, 2026-10-28.
 -- Submits through the existing game UI. A submission is NOT a confirmed reward.
 -- No guessed server remotes, debounce edits or downloaded executable code.
 local Players = game:GetService("Players")
@@ -47,7 +47,7 @@ do
     local flushing = false
     logPath = base .. "_1.jsonl"
     env.SourcesHubRedeemerLastLog = logMemory
-    local info = {version = "v9", session = session, files = files}
+    local info = {version = "v10", session = session, files = files}
     env.SourcesHubRedeemerLogInfo = info
 
     function diagnostics.refresh()
@@ -242,7 +242,7 @@ do
         return ok, ok and "Copied RECENT MEMORY ONLY (max 500 entries / 1 MB); saved files may contain more." or tostring(err)
     end
 
-    audit("session_start", {version = "v9", file = logPath, file_logging = disk,
+    audit("session_start", {version = "v10", file = logPath, file_logging = disk,
         scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
         capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
         note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
@@ -619,7 +619,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB trigger capture / v9 logs"
+subLabel.Text = "SAB complete-code capture / v10"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -786,6 +786,29 @@ delayStroke.Color = Color3.fromRGB(255, 255, 255)
 delayStroke.Thickness = 1
 delayStroke.Parent = delayBox
 
+local partsButton = Instance.new("TextButton")
+partsButton.Name = "PartsButton"
+partsButton.Size = UDim2.new(0, 120, 1, 0)
+partsButton.Position = UDim2.new(0, 120, 0, 0)
+partsButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+partsButton.BackgroundTransparency = 0.35
+partsButton.BorderSizePixel = 0
+partsButton.Text = "PARTS: 3 (CLICK)"
+partsButton.TextColor3 = Color3.fromRGB(90, 12, 18)
+partsButton.Font = Enum.Font.GothamBold
+partsButton.TextSize = 9
+partsButton.AutoButtonColor = true
+partsButton.Parent = bottomRow
+
+local partsCorner = Instance.new("UICorner")
+partsCorner.CornerRadius = UDim.new(0, 10)
+partsCorner.Parent = partsButton
+
+local partsStroke = Instance.new("UIStroke")
+partsStroke.Color = Color3.fromRGB(255, 255, 255)
+partsStroke.Thickness = 1
+partsStroke.Parent = partsButton
+
 local setButton = Instance.new("TextButton")
 setButton.Name = "SetButton"
 setButton.Size = UDim2.new(0, 70, 1, 0)
@@ -832,6 +855,7 @@ local function whiteHover(btn)
 end
 whiteHover(setButton)
 whiteHover(redeemButton)
+whiteHover(partsButton)
 
 
 
@@ -951,7 +975,7 @@ local manualWatching, manualCount = false, 0
 local submittedAnswers = {}
 local generation = 0
 state.captureGeneration = generation
-local MAX_PARTS = 3
+local expectedParts = 3
 local collecting = false
 local fragments, submissionQueue = {}, {}
 local delay, nextSubmitAt = 0.5, 0
@@ -972,6 +996,18 @@ local function updateDelay()
 end
 connect(delayBox.FocusLost, function() updateDelay() end)
 connect(setButton.MouseButton1Click, updateDelay)
+connect(partsButton.MouseButton1Click, function()
+    if collecting then
+        setStatus("Finish or stop the current round before changing the part count.", true)
+        return
+    end
+    if expectedParts == 2 then expectedParts = 3
+    elseif expectedParts == 3 then expectedParts = 4
+    else expectedParts = 2 end
+    partsButton.Text = "PARTS: " .. expectedParts .. " (CLICK)"
+    audit("expected_parts_changed", {expected_parts = expectedParts})
+    setStatus("Expected code parts: " .. expectedParts .. ". Only the complete code will be submitted.")
+end)
 local function advanceGeneration()
     generation = generation + 1
     state.captureGeneration = generation
@@ -995,13 +1031,14 @@ local function processBuffer()
             if busy or os.clock() < nextSubmitAt then
                 task.wait(0.05)
             else
-                -- Snapshot each cumulative value when its fragment arrives.
-                -- Rapid arrivals still submit A, then AB, then ABC in that order.
+                -- Trigger mode queues only the complete configured code.
+                -- Riddle mode may still queue independent explicit answers.
                 local item = table.remove(submissionQueue, 1)
                 if item.generation == token then
                     busy = true
                     audit("submission_start", {code = item.code, source = item.source, part = item.part,
-                        generation = token, mode = manualWatching and "riddle" or "trigger", input_event = item.inputEventId, delay = delay})
+                        generation = token, mode = manualWatching and "riddle" or "trigger", input_event = item.inputEventId,
+                        delay = delay, expected_parts = manualWatching and nil or expectedParts})
                     local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token)
                     if not callOk then message, submitted = tostring(submitted), false end
                     audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
@@ -1023,7 +1060,8 @@ local function processBuffer()
                     if submitted then
                         local tail = manualWatching and "manual watch continues"
                             or (collecting and "waiting for next part" or "waiting for USE CODE / CODE IS")
-                        setStatus("Message " .. item.part .. ": submit attempted; " .. tail .. ".")
+                        local prefix = manualWatching and ("Answer " .. item.part) or ("Complete " .. item.part .. "-part code")
+                        setStatus(prefix .. ": submit attempted; " .. tail .. ".")
                     end
                 end
             end
@@ -1089,7 +1127,7 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
         return
     end
     if trigger then
-        audit("trigger_received", {source = source, text = message})
+        audit("trigger_received", {source = source, text = message, expected_parts = expectedParts})
         advanceGeneration()
         collecting = true
         fragments, submissionQueue = {}, {}
@@ -1097,8 +1135,8 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
         for _, labelState in pairs(state.labels) do labelState.pending = false end
         lastCode = ""
         updatePreview()
-        scanButton.Text = "COLLECTING: 0 / 3"
-        setStatus("Trigger seen. Waiting for NEW announcements (max 3 parts).")
+        scanButton.Text = "COLLECTING: 0 / " .. expectedParts
+        setStatus("Trigger seen. Waiting for " .. expectedParts .. " NEW code parts. No partial submission.")
         print("[Sources Hub] New round: " .. message)
         -- Neither text before the phrase nor text following it in THIS same
         -- announcement is captured. Only subsequently received messages count.
@@ -1108,17 +1146,21 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
     local part = #fragments
     lastCode = table.concat(fragments, "")
     updatePreview()
-    table.insert(submissionQueue, {code = lastCode, part = part, generation = generation, source = source, inputEventId = inputEventId})
-    audit("code_queued", {source = source, fragment = message, code = lastCode, part = part, input_event = inputEventId, generation = generation})
+    audit("part_captured", {source = source, fragment = message, code = lastCode, part = part,
+        expected_parts = expectedParts, input_event = inputEventId, generation = generation})
     print("[Sources Hub] Part " .. part .. " (" .. source .. "): " .. message .. " -> " .. lastCode)
-    if part >= MAX_PARTS then
+    if part >= expectedParts then
         collecting = false
+        table.insert(submissionQueue, {code = lastCode, part = part, generation = generation, source = source, inputEventId = inputEventId})
+        audit("code_queued", {source = source, fragment = message, code = lastCode, part = part,
+            expected_parts = expectedParts, complete = true, input_event = inputEventId, generation = generation})
         scanButton.Text = "WAITING FOR TRIGGER"
+        setStatus("Captured part " .. part .. " / " .. expectedParts .. ". Complete code queued: " .. lastCode)
+        task.defer(processBuffer)
     else
-        scanButton.Text = "COLLECTING: " .. part .. " / 3"
+        scanButton.Text = "COLLECTING: " .. part .. " / " .. expectedParts
+        setStatus("Captured part " .. part .. " / " .. expectedParts .. ": " .. lastCode .. ". Waiting for the rest.")
     end
-    setStatus("Captured part " .. part .. ": " .. lastCode)
-    task.defer(processBuffer)
 end
 
 local function payloadText(value, depth)
@@ -1304,7 +1346,7 @@ connect(scanButton.MouseButton1Click, function()
         scanButton.BackgroundColor3 = Color3.fromRGB(120, 220, 140)
         statusDot.BackgroundColor3 = Color3.fromRGB(50, 200, 80)
         local remoteCount, labelCount = sourceSummary()
-        setStatus("Waiting for USE CODE / CODE IS. Sources: " .. remoteCount .. " remotes / " .. labelCount .. " UI labels", remoteCount + labelCount == 0)
+        setStatus("Waiting for USE CODE / CODE IS (" .. expectedParts .. " parts). Sources: " .. remoteCount .. " remotes / " .. labelCount .. " UI labels", remoteCount + labelCount == 0)
     else
         scanButton.Text = "START SCAN"
         scanButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
@@ -1351,4 +1393,4 @@ if type(identifyexecutor) == "function" then
 end
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready. START SCAN: trigger + 3 parts. RIDDLE ANSWER: explicit answer fields only.")
+setStatus("Ready. Select 2/3/4 parts, then START SCAN. Only the complete code is submitted once.")
