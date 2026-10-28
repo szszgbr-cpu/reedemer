@@ -1,4 +1,4 @@
--- Sources Hub Redeemer - configurable complete-code capture, 2026-10-28.
+-- Sources Hub Redeemer - configurable submission rules, 2026-10-28.
 -- Submits through the existing game UI. A submission is NOT a confirmed reward.
 -- No guessed server remotes, debounce edits or downloaded executable code.
 local Players = game:GetService("Players")
@@ -47,7 +47,7 @@ do
     local flushing = false
     logPath = base .. "_1.jsonl"
     env.SourcesHubRedeemerLastLog = logMemory
-    local info = {version = "v10", session = session, files = files}
+    local info = {version = "v11", session = session, files = files}
     env.SourcesHubRedeemerLogInfo = info
 
     function diagnostics.refresh()
@@ -242,7 +242,7 @@ do
         return ok, ok and "Copied RECENT MEMORY ONLY (max 500 entries / 1 MB); saved files may contain more." or tostring(err)
     end
 
-    audit("session_start", {version = "v10", file = logPath, file_logging = disk,
+    audit("session_start", {version = "v11", file = logPath, file_logging = disk,
         scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
         capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
         note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
@@ -566,8 +566,8 @@ screenGui.Parent = PlayerGui
 -- Main Container (Translucent White)
 local mainFrame = Instance.new("ImageLabel")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 340, 0, 346)
-mainFrame.Position = UDim2.new(0.5, -170, 0.5, -153)
+mainFrame.Size = UDim2.new(0, 340, 0, 460)
+mainFrame.Position = UDim2.new(0.5, -170, 0.5, -230)
 mainFrame.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
 mainFrame.BackgroundTransparency = 0.1
 mainFrame.Image = "rbxassetid://93857225029776"
@@ -619,7 +619,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB complete-code capture / v10"
+subLabel.Text = "SAB configurable submit / v11"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -687,11 +687,60 @@ modeStroke.Color = Color3.fromRGB(255, 255, 255)
 modeStroke.Thickness = 1
 modeStroke.Parent = modeButton
 
+local function createToggleRow(name, labelText, y, enabled)
+    local row = Instance.new("Frame")
+    row.Name = name .. "Row"
+    row.Size = UDim2.new(1, -24, 0, 24)
+    row.Position = UDim2.new(0, 12, 0, y)
+    row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    row.BackgroundTransparency = 0.55
+    row.BorderSizePixel = 0
+    row.Parent = mainFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 9)
+    corner.Parent = row
+
+    local label = Instance.new("TextLabel")
+    label.Name = "Label"
+    label.Size = UDim2.new(1, -68, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(70, 75, 85)
+    label.TextSize = 10
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local button = Instance.new("TextButton")
+    button.Name = name .. "Toggle"
+    button.Size = UDim2.new(0, 54, 0, 20)
+    button.Position = UDim2.new(1, -56, 0, 2)
+    button.BackgroundColor3 = enabled and Color3.fromRGB(70, 190, 100) or Color3.fromRGB(210, 70, 75)
+    button.BorderSizePixel = 0
+    button.Font = Enum.Font.GothamBold
+    button.Text = enabled and "ON" or "OFF"
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.TextSize = 10
+    button.Parent = row
+
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 8)
+    buttonCorner.Parent = button
+    return button
+end
+
+local everyPartButton = createToggleRow("EveryPart", "SUBMIT EVERY PART", 124, false)
+local wait2Button = createToggleRow("Wait2", "WAIT FOR 2 PARTS", 152, false)
+local wait3Button = createToggleRow("Wait3", "WAIT FOR 3 PARTS", 180, true)
+local wait4Button = createToggleRow("Wait4", "WAIT FOR 4 PARTS", 208, false)
+
 -- Preview Code Textbox
 local previewBox = Instance.new("TextBox")
 previewBox.Name = "PreviewBox"
 previewBox.Size = UDim2.new(1, -102, 0, 30)
-previewBox.Position = UDim2.new(0, 12, 0, 126)
+previewBox.Position = UDim2.new(0, 12, 0, 240)
 previewBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 previewBox.BackgroundTransparency = 0.35
 previewBox.BorderSizePixel = 0
@@ -723,7 +772,7 @@ pad.Parent = previewBox
 local redeemButton = Instance.new("TextButton")
 redeemButton.Name = "RedeemButton"
 redeemButton.Size = UDim2.new(0, 70, 0, 30)
-redeemButton.Position = UDim2.new(1, -82, 0, 126)
+redeemButton.Position = UDim2.new(1, -82, 0, 240)
 redeemButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 redeemButton.BorderSizePixel = 0
 redeemButton.Text = "REDEEM"
@@ -746,7 +795,7 @@ redeemStroke.Parent = redeemButton
 local bottomRow = Instance.new("Frame")
 bottomRow.Name = "BottomRow"
 bottomRow.Size = UDim2.new(1, -24, 0, 30)
-bottomRow.Position = UDim2.new(0, 12, 0, 162)
+bottomRow.Position = UDim2.new(0, 12, 0, 276)
 bottomRow.BackgroundTransparency = 1
 bottomRow.Parent = mainFrame
 
@@ -785,29 +834,6 @@ local delayStroke = Instance.new("UIStroke")
 delayStroke.Color = Color3.fromRGB(255, 255, 255)
 delayStroke.Thickness = 1
 delayStroke.Parent = delayBox
-
-local partsButton = Instance.new("TextButton")
-partsButton.Name = "PartsButton"
-partsButton.Size = UDim2.new(0, 120, 1, 0)
-partsButton.Position = UDim2.new(0, 120, 0, 0)
-partsButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-partsButton.BackgroundTransparency = 0.35
-partsButton.BorderSizePixel = 0
-partsButton.Text = "PARTS: 3 (CLICK)"
-partsButton.TextColor3 = Color3.fromRGB(90, 12, 18)
-partsButton.Font = Enum.Font.GothamBold
-partsButton.TextSize = 9
-partsButton.AutoButtonColor = true
-partsButton.Parent = bottomRow
-
-local partsCorner = Instance.new("UICorner")
-partsCorner.CornerRadius = UDim.new(0, 10)
-partsCorner.Parent = partsButton
-
-local partsStroke = Instance.new("UIStroke")
-partsStroke.Color = Color3.fromRGB(255, 255, 255)
-partsStroke.Thickness = 1
-partsStroke.Parent = partsButton
 
 local setButton = Instance.new("TextButton")
 setButton.Name = "SetButton"
@@ -855,7 +881,6 @@ local function whiteHover(btn)
 end
 whiteHover(setButton)
 whiteHover(redeemButton)
-whiteHover(partsButton)
 
 
 
@@ -894,7 +919,7 @@ end)
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Name = "Status"
-statusLabel.Position = UDim2.new(0, 12, 0, 242)
+statusLabel.Position = UDim2.new(0, 12, 0, 356)
 statusLabel.Size = UDim2.new(1, -24, 0, 48)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Font = Enum.Font.Gotham
@@ -913,7 +938,7 @@ end
 
 logLabel = Instance.new("TextButton")
 logLabel.Name = "LogStatus"
-logLabel.Position = UDim2.new(0, 12, 0, 294)
+logLabel.Position = UDim2.new(0, 12, 0, 408)
 logLabel.Size = UDim2.new(1, -24, 0, 42)
 logLabel.BackgroundTransparency = 1
 logLabel.Font = Enum.Font.Gotham
@@ -927,7 +952,7 @@ connect(logLabel.MouseButton1Click, function()
 end)
 local checkButton = Instance.new("TextButton")
 checkButton.Name = "CheckUI"
-checkButton.Position = UDim2.new(0, 12, 0, 200)
+checkButton.Position = UDim2.new(0, 12, 0, 314)
 checkButton.Size = UDim2.new(1, -24, 0, 30)
 checkButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 checkButton.BorderSizePixel = 0
@@ -975,7 +1000,8 @@ local manualWatching, manualCount = false, 0
 local submittedAnswers = {}
 local generation = 0
 state.captureGeneration = generation
-local expectedParts = 3
+local submitOptions = {every = false, [2] = false, [3] = true, [4] = false}
+local optionButtons = {every = everyPartButton, [2] = wait2Button, [3] = wait3Button, [4] = wait4Button}
 local collecting = false
 local fragments, submissionQueue = {}, {}
 local delay, nextSubmitAt = 0.5, 0
@@ -996,18 +1022,50 @@ local function updateDelay()
 end
 connect(delayBox.FocusLost, function() updateDelay() end)
 connect(setButton.MouseButton1Click, updateDelay)
-connect(partsButton.MouseButton1Click, function()
+local function optionsSnapshot()
+    return {every_part = submitOptions.every, wait_2 = submitOptions[2],
+        wait_3 = submitOptions[3], wait_4 = submitOptions[4]}
+end
+local function optionSummary()
+    local active = {}
+    if submitOptions.every then active[#active + 1] = "EVERY PART" end
+    for part = 2, 4 do
+        if submitOptions[part] then active[#active + 1] = "WAIT " .. part end
+    end
+    return #active > 0 and table.concat(active, " + ") or "NONE (PREVIEW ONLY)"
+end
+local function targetCeiling()
+    local highest = submitOptions.every and 4 or 0
+    for part = 2, 4 do
+        if submitOptions[part] and part > highest then highest = part end
+    end
+    return highest > 0 and highest or 4
+end
+local function submissionReason(part)
+    local reasons = {}
+    if submitOptions.every then reasons[#reasons + 1] = "every_part" end
+    if submitOptions[part] then reasons[#reasons + 1] = "wait_" .. part end
+    return #reasons > 0 and table.concat(reasons, "+") or nil
+end
+local function updateOptionButton(key)
+    local button, enabled = optionButtons[key], submitOptions[key]
+    button.Text = enabled and "ON" or "OFF"
+    button.BackgroundColor3 = enabled and Color3.fromRGB(70, 190, 100) or Color3.fromRGB(210, 70, 75)
+end
+local function toggleOption(key)
     if collecting then
-        setStatus("Finish or stop the current round before changing the part count.", true)
+        setStatus("Finish or stop the current round before changing submission rules.", true)
         return
     end
-    if expectedParts == 2 then expectedParts = 3
-    elseif expectedParts == 3 then expectedParts = 4
-    else expectedParts = 2 end
-    partsButton.Text = "PARTS: " .. expectedParts .. " (CLICK)"
-    audit("expected_parts_changed", {expected_parts = expectedParts})
-    setStatus("Expected code parts: " .. expectedParts .. ". Only the complete code will be submitted.")
-end)
+    submitOptions[key] = not submitOptions[key]
+    updateOptionButton(key)
+    audit("submit_option_changed", {option = tostring(key), enabled = submitOptions[key], options = optionsSnapshot()})
+    setStatus("Active submission rules: " .. optionSummary())
+end
+connect(everyPartButton.MouseButton1Click, function() toggleOption("every") end)
+connect(wait2Button.MouseButton1Click, function() toggleOption(2) end)
+connect(wait3Button.MouseButton1Click, function() toggleOption(3) end)
+connect(wait4Button.MouseButton1Click, function() toggleOption(4) end)
 local function advanceGeneration()
     generation = generation + 1
     state.captureGeneration = generation
@@ -1031,14 +1089,14 @@ local function processBuffer()
             if busy or os.clock() < nextSubmitAt then
                 task.wait(0.05)
             else
-                -- Trigger mode queues only the complete configured code.
-                -- Riddle mode may still queue independent explicit answers.
+                -- Each cumulative value is queued at most once, even when multiple
+                -- enabled rules match the same part number.
                 local item = table.remove(submissionQueue, 1)
                 if item.generation == token then
                     busy = true
                     audit("submission_start", {code = item.code, source = item.source, part = item.part,
                         generation = token, mode = manualWatching and "riddle" or "trigger", input_event = item.inputEventId,
-                        delay = delay, expected_parts = manualWatching and nil or expectedParts})
+                        delay = delay, submission_rule = item.reason})
                     local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token)
                     if not callOk then message, submitted = tostring(submitted), false end
                     audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
@@ -1060,7 +1118,10 @@ local function processBuffer()
                     if submitted then
                         local tail = manualWatching and "manual watch continues"
                             or (collecting and "waiting for next part" or "waiting for USE CODE / CODE IS")
-                        local prefix = manualWatching and ("Answer " .. item.part) or ("Complete " .. item.part .. "-part code")
+                        local prefix
+                        if manualWatching then prefix = "Answer " .. item.part
+                        elseif item.reason and item.reason:find("every_part", 1, true) then prefix = "Cumulative part " .. item.part
+                        else prefix = "Selected " .. item.part .. "-part code" end
                         setStatus(prefix .. ": submit attempted; " .. tail .. ".")
                     end
                 end
@@ -1127,7 +1188,7 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
         return
     end
     if trigger then
-        audit("trigger_received", {source = source, text = message, expected_parts = expectedParts})
+        audit("trigger_received", {source = source, text = message, options = optionsSnapshot()})
         advanceGeneration()
         collecting = true
         fragments, submissionQueue = {}, {}
@@ -1135,8 +1196,8 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
         for _, labelState in pairs(state.labels) do labelState.pending = false end
         lastCode = ""
         updatePreview()
-        scanButton.Text = "COLLECTING: 0 / " .. expectedParts
-        setStatus("Trigger seen. Waiting for " .. expectedParts .. " NEW code parts. No partial submission.")
+        scanButton.Text = "COLLECTING: 0 / " .. targetCeiling()
+        setStatus("Trigger seen. Active rules: " .. optionSummary())
         print("[Sources Hub] New round: " .. message)
         -- Neither text before the phrase nor text following it in THIS same
         -- announcement is captured. Only subsequently received messages count.
@@ -1146,20 +1207,29 @@ local function onAnnouncement(value, source, explicitAnswer, inputEventId)
     local part = #fragments
     lastCode = table.concat(fragments, "")
     updatePreview()
+    local ceiling = targetCeiling()
+    local reason = submissionReason(part)
     audit("part_captured", {source = source, fragment = message, code = lastCode, part = part,
-        expected_parts = expectedParts, input_event = inputEventId, generation = generation})
+        options = optionsSnapshot(), queued = reason ~= nil, submission_rule = reason,
+        input_event = inputEventId, generation = generation})
     print("[Sources Hub] Part " .. part .. " (" .. source .. "): " .. message .. " -> " .. lastCode)
-    if part >= expectedParts then
-        collecting = false
-        table.insert(submissionQueue, {code = lastCode, part = part, generation = generation, source = source, inputEventId = inputEventId})
+    if reason then
+        table.insert(submissionQueue, {code = lastCode, part = part, generation = generation,
+            source = source, inputEventId = inputEventId, reason = reason})
         audit("code_queued", {source = source, fragment = message, code = lastCode, part = part,
-            expected_parts = expectedParts, complete = true, input_event = inputEventId, generation = generation})
+            options = optionsSnapshot(), submission_rule = reason, input_event = inputEventId, generation = generation})
+    end
+    if part >= ceiling then
+        collecting = false
         scanButton.Text = "WAITING FOR TRIGGER"
-        setStatus("Captured part " .. part .. " / " .. expectedParts .. ". Complete code queued: " .. lastCode)
+    else
+        scanButton.Text = "COLLECTING: " .. part .. " / " .. ceiling
+    end
+    if reason then
+        setStatus("Captured part " .. part .. " / " .. ceiling .. ". Queued by " .. reason .. ": " .. lastCode)
         task.defer(processBuffer)
     else
-        scanButton.Text = "COLLECTING: " .. part .. " / " .. expectedParts
-        setStatus("Captured part " .. part .. " / " .. expectedParts .. ": " .. lastCode .. ". Waiting for the rest.")
+        setStatus("Captured part " .. part .. " / " .. ceiling .. ": " .. lastCode .. ". No matching submit rule.")
     end
 end
 
@@ -1346,7 +1416,7 @@ connect(scanButton.MouseButton1Click, function()
         scanButton.BackgroundColor3 = Color3.fromRGB(120, 220, 140)
         statusDot.BackgroundColor3 = Color3.fromRGB(50, 200, 80)
         local remoteCount, labelCount = sourceSummary()
-        setStatus("Waiting for USE CODE / CODE IS (" .. expectedParts .. " parts). Sources: " .. remoteCount .. " remotes / " .. labelCount .. " UI labels", remoteCount + labelCount == 0)
+        setStatus("Waiting for USE CODE / CODE IS. Rules: " .. optionSummary() .. ". Sources: " .. remoteCount .. " remotes / " .. labelCount .. " UI labels", remoteCount + labelCount == 0)
     else
         scanButton.Text = "START SCAN"
         scanButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
@@ -1393,4 +1463,4 @@ if type(identifyexecutor) == "function" then
 end
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready. Select 2/3/4 parts, then START SCAN. Only the complete code is submitted once.")
+setStatus("Ready. Toggle EVERY PART and/or WAIT 2/3/4, then START SCAN.")
