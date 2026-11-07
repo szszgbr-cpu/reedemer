@@ -1,6 +1,7 @@
--- Sources Hub Redeemer - configurable submission rules, 2026-10-28.
+-- Sources Hub Redeemer - configurable submission rules + local AI riddle assist, 2026-11-07.
 -- Submits through the existing game UI. A submission is NOT a confirmed reward.
--- No guessed server remotes, debounce edits or downloaded executable code.
+-- AI suggestions are preview-only: the REDEEM button always requires a user click.
+-- The OpenAI API key stays in the separate Windows helper and is never stored here.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -47,7 +48,7 @@ do
     local flushing = false
     logPath = base .. "_1.jsonl"
     env.SourcesHubRedeemerLastLog = logMemory
-    local info = {version = "v11", session = session, files = files}
+    local info = {version = "v12", session = session, files = files}
     env.SourcesHubRedeemerLogInfo = info
 
     function diagnostics.refresh()
@@ -242,7 +243,7 @@ do
         return ok, ok and "Copied RECENT MEMORY ONLY (max 500 entries / 1 MB); saved files may contain more." or tostring(err)
     end
 
-    audit("session_start", {version = "v11", file = logPath, file_logging = disk,
+    audit("session_start", {version = "v12", file = logPath, file_logging = disk,
         scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
         capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
         note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
@@ -566,8 +567,8 @@ screenGui.Parent = PlayerGui
 -- Main Container (Translucent White)
 local mainFrame = Instance.new("ImageLabel")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 340, 0, 460)
-mainFrame.Position = UDim2.new(0.5, -170, 0.5, -230)
+mainFrame.Size = UDim2.new(0, 340, 0, 532)
+mainFrame.Position = UDim2.new(0.5, -170, 0.5, -266)
 mainFrame.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
 mainFrame.BackgroundTransparency = 0.1
 mainFrame.Image = "rbxassetid://93857225029776"
@@ -619,7 +620,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB configurable submit / v11"
+subLabel.Text = "SAB configurable submit + AI / v12"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -687,6 +688,56 @@ modeStroke.Color = Color3.fromRGB(255, 255, 255)
 modeStroke.Thickness = 1
 modeStroke.Parent = modeButton
 
+-- Preview-only AI riddle assistant. It never presses the game's Submit button.
+local aiButton = Instance.new("TextButton")
+aiButton.Name = "AiRiddleAssistButton"
+aiButton.Size = UDim2.new(1, -24, 0, 30)
+aiButton.Position = UDim2.new(0, 12, 0, 124)
+aiButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+aiButton.BackgroundTransparency = 0.35
+aiButton.BorderSizePixel = 0
+aiButton.Font = Enum.Font.GothamBold
+aiButton.Text = "AI RIDDLE ASSIST: OFF"
+aiButton.TextColor3 = Color3.fromRGB(80, 85, 95)
+aiButton.TextSize = 10
+aiButton.AutoButtonColor = false
+aiButton.Parent = mainFrame
+
+local aiCorner = Instance.new("UICorner")
+aiCorner.CornerRadius = UDim.new(0, 10)
+aiCorner.Parent = aiButton
+
+local aiStroke = Instance.new("UIStroke")
+aiStroke.Color = Color3.fromRGB(255, 255, 255)
+aiStroke.Thickness = 1
+aiStroke.Parent = aiButton
+
+local pairBox = Instance.new("TextBox")
+pairBox.Name = "AiPairCode"
+pairBox.Size = UDim2.new(1, -24, 0, 30)
+pairBox.Position = UDim2.new(0, 12, 0, 160)
+pairBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+pairBox.BackgroundTransparency = 0.35
+pairBox.BorderSizePixel = 0
+pairBox.PlaceholderText = "PC HELPER PAIR CODE (6 DIGITS)"
+pairBox.PlaceholderColor3 = Color3.fromRGB(130, 135, 145)
+pairBox.Text = tostring(env.SourcesHubAiPairCode or "")
+pairBox.TextColor3 = Color3.fromRGB(40, 45, 55)
+pairBox.ClearTextOnFocus = false
+pairBox.Font = Enum.Font.GothamBold
+pairBox.TextSize = 10
+pairBox.TextXAlignment = Enum.TextXAlignment.Center
+pairBox.Parent = mainFrame
+
+local pairCorner = Instance.new("UICorner")
+pairCorner.CornerRadius = UDim.new(0, 10)
+pairCorner.Parent = pairBox
+
+local pairStroke = Instance.new("UIStroke")
+pairStroke.Color = Color3.fromRGB(255, 255, 255)
+pairStroke.Thickness = 1
+pairStroke.Parent = pairBox
+
 local function createToggleRow(name, labelText, y, enabled)
     local row = Instance.new("Frame")
     row.Name = name .. "Row"
@@ -731,16 +782,16 @@ local function createToggleRow(name, labelText, y, enabled)
     return button
 end
 
-local everyPartButton = createToggleRow("EveryPart", "SUBMIT EVERY PART", 124, false)
-local wait2Button = createToggleRow("Wait2", "WAIT FOR 2 PARTS", 152, false)
-local wait3Button = createToggleRow("Wait3", "WAIT FOR 3 PARTS", 180, true)
-local wait4Button = createToggleRow("Wait4", "WAIT FOR 4 PARTS", 208, false)
+local everyPartButton = createToggleRow("EveryPart", "SUBMIT EVERY PART", 196, false)
+local wait2Button = createToggleRow("Wait2", "WAIT FOR 2 PARTS", 224, false)
+local wait3Button = createToggleRow("Wait3", "WAIT FOR 3 PARTS", 252, true)
+local wait4Button = createToggleRow("Wait4", "WAIT FOR 4 PARTS", 280, false)
 
 -- Preview Code Textbox
 local previewBox = Instance.new("TextBox")
 previewBox.Name = "PreviewBox"
 previewBox.Size = UDim2.new(1, -102, 0, 30)
-previewBox.Position = UDim2.new(0, 12, 0, 240)
+previewBox.Position = UDim2.new(0, 12, 0, 312)
 previewBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 previewBox.BackgroundTransparency = 0.35
 previewBox.BorderSizePixel = 0
@@ -772,7 +823,7 @@ pad.Parent = previewBox
 local redeemButton = Instance.new("TextButton")
 redeemButton.Name = "RedeemButton"
 redeemButton.Size = UDim2.new(0, 70, 0, 30)
-redeemButton.Position = UDim2.new(1, -82, 0, 240)
+redeemButton.Position = UDim2.new(1, -82, 0, 312)
 redeemButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 redeemButton.BorderSizePixel = 0
 redeemButton.Text = "REDEEM"
@@ -795,7 +846,7 @@ redeemStroke.Parent = redeemButton
 local bottomRow = Instance.new("Frame")
 bottomRow.Name = "BottomRow"
 bottomRow.Size = UDim2.new(1, -24, 0, 30)
-bottomRow.Position = UDim2.new(0, 12, 0, 276)
+bottomRow.Position = UDim2.new(0, 12, 0, 348)
 bottomRow.BackgroundTransparency = 1
 bottomRow.Parent = mainFrame
 
@@ -919,7 +970,7 @@ end)
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Name = "Status"
-statusLabel.Position = UDim2.new(0, 12, 0, 356)
+statusLabel.Position = UDim2.new(0, 12, 0, 428)
 statusLabel.Size = UDim2.new(1, -24, 0, 48)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Font = Enum.Font.Gotham
@@ -938,7 +989,7 @@ end
 
 logLabel = Instance.new("TextButton")
 logLabel.Name = "LogStatus"
-logLabel.Position = UDim2.new(0, 12, 0, 408)
+logLabel.Position = UDim2.new(0, 12, 0, 480)
 logLabel.Size = UDim2.new(1, -24, 0, 42)
 logLabel.BackgroundTransparency = 1
 logLabel.Font = Enum.Font.Gotham
@@ -952,7 +1003,7 @@ connect(logLabel.MouseButton1Click, function()
 end)
 local checkButton = Instance.new("TextButton")
 checkButton.Name = "CheckUI"
-checkButton.Position = UDim2.new(0, 12, 0, 314)
+checkButton.Position = UDim2.new(0, 12, 0, 386)
 checkButton.Size = UDim2.new(1, -24, 0, 30)
 checkButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 checkButton.BorderSizePixel = 0
@@ -994,6 +1045,10 @@ local function checkUi()
     return true
 end
 connect(checkButton.MouseButton1Click, checkUi)
+
+local aiAssistEnabled, aiAwaitingQuestion, aiBusy = false, false, false
+local aiRecent = {}
+local aiEndpoint = tostring(env.SourcesHubAiEndpoint or "http://10.0.2.2:8787/solve")
 
 local scanning, busy, processing = false, false, false
 local manualWatching, manualCount = false, 0
@@ -1242,6 +1297,126 @@ local function payloadText(value, depth)
     end
     return payloadText(value[1], depth + 1)
 end
+
+local function aiRequestFunction()
+    if type(env.request) == "function" then return env.request end
+    if type(env.http_request) == "function" then return env.http_request end
+    if type(env.syn) == "table" and type(env.syn.request) == "function" then return env.syn.request end
+    if type(env.http) == "table" and type(env.http.request) == "function" then return env.http.request end
+    return nil
+end
+
+local function normalizeAiAnswer(value)
+    if type(value) ~= "string" then return nil end
+    local answer = value:match("^%s*(.-)%s*$")
+    if answer == "" or #answer > 96 or not answer:match("^[A-Za-z0-9_%-]+$") then return nil end
+    return answer
+end
+
+local function isRiddleIntro(value)
+    local message = cleanMessage(value)
+    if not message then return false end
+    local lower = message:lower():gsub("%s+", " ")
+    return lower:find("the riddle is", 1, true) ~= nil
+        or lower:find("riddle is", 1, true) ~= nil
+        or lower:match("^riddle%s*:") ~= nil
+end
+
+local function requestAiSuggestion(question, source, inputEventId)
+    if not aiAssistEnabled or aiBusy or not state.alive then return end
+    local pairCode = tostring(pairBox.Text or ""):match("^%s*(.-)%s*$")
+    if not pairCode:match("^%d%d%d%d%d%d$") then
+        setStatus("AI: enter the 6-digit pair code shown by the PC helper.", true)
+        audit("ai_request_rejected", {reason = "invalid_pair_code", question = question, source = source})
+        return
+    end
+    local requestFn = aiRequestFunction()
+    if not requestFn then
+        setStatus("AI: this executor has no supported HTTP request function.", true)
+        audit("ai_request_rejected", {reason = "request_unavailable", question = question, source = source})
+        return
+    end
+    local HttpService = game:GetService("HttpService")
+    aiBusy = true
+    env.SourcesHubAiPairCode = pairCode
+    setStatus("AI: solving riddle with the local helper...")
+    audit("ai_request_start", {question = question, source = source, input_event = inputEventId,
+        endpoint = aiEndpoint, model = "gpt-6-luna", auto_submit = false})
+    task.spawn(function()
+        local started = os.clock()
+        local ok, response = pcall(requestFn, {
+            Url = aiEndpoint,
+            Method = "POST",
+            Headers = {['Content-Type'] = "application/json", ['X-Pair-Code'] = pairCode},
+            Body = HttpService:JSONEncode({question = question, source = source})
+        })
+        local elapsed = os.clock() - started
+        if not state.alive then return end
+        aiBusy = false
+        if not ok or type(response) ~= "table" then
+            local detail = ok and "invalid helper response" or tostring(response)
+            audit("ai_request_result", {ok = false, question = question, error = detail, elapsed = elapsed})
+            setStatus("AI helper connection failed: " .. detail, true)
+            return
+        end
+        local statusCode = tonumber(response.StatusCode or response.Status or response.status_code) or 0
+        local body = response.Body or response.body or ""
+        local decodedOk, result = pcall(function() return HttpService:JSONDecode(body) end)
+        if not decodedOk or type(result) ~= "table" or statusCode < 200 or statusCode >= 300 or result.ok ~= true then
+            local detail = decodedOk and type(result) == "table" and tostring(result.error or result.message or body) or tostring(body)
+            audit("ai_request_result", {ok = false, question = question, status_code = statusCode,
+                error = detail, elapsed = elapsed})
+            setStatus("AI helper error: " .. detail, true)
+            return
+        end
+        local answer = normalizeAiAnswer(result.answer)
+        local confidence = math.max(0, math.min(100, tonumber(result.confidence) or 0))
+        audit("ai_request_result", {ok = true, question = question, answer = answer,
+            alternatives = result.alternatives, confidence = confidence, basis = result.basis,
+            resolver = result.resolver, status = result.status, elapsed = elapsed, auto_submit = false})
+        if not answer then
+            setStatus("AI: no reliable answer. " .. tostring(result.basis or "Not enough public information."), true)
+            return
+        end
+        -- Preview only. Never queue or submit an AI-generated answer automatically.
+        lastCode = answer
+        updatePreview()
+        setStatus("AI suggestion: " .. answer .. " (" .. math.floor(confidence + 0.5)
+            .. "%). Review it, then press REDEEM yourself.")
+    end)
+end
+
+local function onAiAnnouncement(value, source, inputEventId)
+    if not aiAssistEnabled or not state.alive then return end
+    local message = cleanMessage(value)
+    if not message or message == "" or #message > 2000 then return end
+    local now = os.clock()
+    local previous = aiRecent[message]
+    if previous and previous.source ~= source and now - previous.time < 0.75 then return end
+    aiRecent[message] = {source = source, time = now}
+    for key, entry in pairs(aiRecent) do if now - entry.time > 3 then aiRecent[key] = nil end end
+    if isRiddleIntro(message) then
+        local trailing = message:match("[Tt][Hh][Ee]%s+[Rr][Ii][Dd][Dd][Ll][Ee]%s+[Ii][Ss]%s*[:%.%-]*%s*(.+)$")
+            or message:match("^[Rr][Ii][Dd][Dd][Ll][Ee]%s*:%s*(.+)$")
+        if trailing then trailing = trailing:gsub("^[%.%s]+", ""):gsub("[%.%s]+$", "") end
+        if trailing and #trailing >= 8 then
+            aiAwaitingQuestion = false
+            audit("ai_riddle_detected", {question = trailing, source = source, input_event = inputEventId})
+            requestAiSuggestion(trailing, source, inputEventId)
+        else
+            aiAwaitingQuestion = true
+            audit("ai_riddle_intro", {text = message, source = source, input_event = inputEventId})
+            setStatus("AI: riddle intro detected; waiting for the question...")
+        end
+        return
+    end
+    if aiAwaitingQuestion then
+        aiAwaitingQuestion = false
+        audit("ai_riddle_detected", {question = message, source = source, input_event = inputEventId})
+        requestAiSuggestion(message, source, inputEventId)
+    end
+end
+
 -- Only inspect explicit answer fields in received notification payloads.
 -- Never interpret question/message text, positional strings, or statusCode as answers.
 local answerKeys = {answer = true, solution = true, code = true,
@@ -1286,16 +1461,23 @@ local function watchRemote(remote)
     state.remotes[remote] = true
     connect(remote.OnClientEvent, function(...)
         -- Observation precedes text extraction and never feeds back into it.
-        local inputEventId = diagnostics.remote("remote:" .. remote:GetFullName(), scanning,
-            manualWatching and "riddle" or "trigger", ...)
+        local remoteSource = "remote:" .. remote:GetFullName()
+        local inputEventId = diagnostics.remote(remoteSource, scanning or aiAssistEnabled,
+            aiAssistEnabled and "ai_riddle" or (manualWatching and "riddle" or "trigger"), ...)
+        if aiAssistEnabled then
+            for i = 1, select("#", ...) do
+                local aiText = payloadText(select(i, ...), 0)
+                if aiText then onAiAnnouncement(aiText, remoteSource, inputEventId) end
+            end
+        end
         if scanning and manualWatching then
             local answer, detail = extractExplicitAnswer(...)
-            audit("answer_inspection", {source = "remote:" .. remote:GetFullName(),
+            audit("answer_inspection", {source = remoteSource,
                 answer = answer, field_or_reason = detail, input_event = inputEventId})
             if answer then
                 if submittedAnswers[answer] then return end
                 print("[Sources Hub] Explicit answer field: " .. detail .. " on " .. remote:GetFullName())
-                onAnnouncement(answer, "remote:" .. remote:GetFullName(), true, inputEventId)
+                onAnnouncement(answer, remoteSource, true, inputEventId)
             else
                 setStatus("RIDDLE ANSWER: " .. detail .. ". Still watching.")
             end
@@ -1306,7 +1488,7 @@ local function watchRemote(remote)
             if message and (isTrigger(message) or normalizeMessage(message)) then
                 audit("remote_text_selected", {source = "remote:" .. remote:GetFullName(),
                     input_event = inputEventId, argument = i, text = message})
-                onAnnouncement(message, "remote:" .. remote:GetFullName(), false, inputEventId)
+                onAnnouncement(message, remoteSource, false, inputEventId)
                 return
             end
         end
@@ -1341,7 +1523,9 @@ local function watchLabel(label, fresh)
             if label.Text == lastText and now - lastTime < 0.75 then return end
             lastText, lastTime = label.Text, now
             local inputEventId = diagnostics.gui(label, "visible_delivery", true, now)
-            onAnnouncement(label.Text, "gui:" .. label:GetFullName(), false, inputEventId)
+            local guiSource = "gui:" .. label:GetFullName()
+            onAiAnnouncement(label.Text, guiSource, inputEventId)
+            onAnnouncement(label.Text, guiSource, false, inputEventId)
         end
     end
     connect(label:GetPropertyChangedSignal("Text"), function()
@@ -1382,6 +1566,31 @@ local function sourceSummary()
     for _ in pairs(state.labels) do labelCount = labelCount + 1 end
     return remoteCount, labelCount
 end
+connect(pairBox.FocusLost, function()
+    local value = tostring(pairBox.Text or ""):match("^%s*(.-)%s*$")
+    pairBox.Text = value
+    env.SourcesHubAiPairCode = value
+    if value ~= "" and not value:match("^%d%d%d%d%d%d$") then
+        setStatus("AI pair code must be exactly 6 digits.", true)
+    end
+end)
+connect(aiButton.MouseButton1Click, function()
+    aiAssistEnabled = not aiAssistEnabled
+    aiAwaitingQuestion, aiBusy, aiRecent = false, false, {}
+    aiButton.Text = aiAssistEnabled and "AI RIDDLE ASSIST: ON (PREVIEW ONLY)" or "AI RIDDLE ASSIST: OFF"
+    aiButton.BackgroundColor3 = aiAssistEnabled and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(255, 255, 255)
+    aiButton.BackgroundTransparency = aiAssistEnabled and 0.15 or 0.35
+    audit("ai_assist_changed", {enabled = aiAssistEnabled, endpoint = aiEndpoint, auto_submit = false})
+    if aiAssistEnabled then
+        if not tostring(pairBox.Text or ""):match("^%d%d%d%d%d%d$") then
+            setStatus("AI assist ON. Start the PC helper and enter its 6-digit pair code.", true)
+        else
+            setStatus("AI assist ON. Waiting for 'the riddle is...'. Suggestions require manual REDEEM.")
+        end
+    else
+        setStatus("AI assist OFF. Any answer already in preview is kept.")
+    end
+end)
 connect(modeButton.MouseButton1Click, function()
     local enable = not manualWatching
     advanceGeneration()
@@ -1463,4 +1672,4 @@ if type(identifyexecutor) == "function" then
 end
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready. Toggle EVERY PART and/or WAIT 2/3/4, then START SCAN.")
+setStatus("Ready. Code scan is unchanged. AI RIDDLE ASSIST adds preview-only suggestions.")
