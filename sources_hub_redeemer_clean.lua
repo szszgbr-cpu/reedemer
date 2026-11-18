@@ -1,4 +1,4 @@
--- Sources Hub Redeemer - configurable submission rules + local AI riddle assist, 2026-11-07.
+-- Sources Hub Redeemer - hardened capture, tracked server results + local AI riddle assist, 2026-11-18.
 -- Submits through the existing game UI. A submission is NOT a confirmed reward.
 -- AI suggestions are preview-only: the REDEEM button always requires a user click.
 -- The OpenAI API key stays in the separate Windows helper and is never stored here.
@@ -48,7 +48,7 @@ do
     local flushing = false
     logPath = base .. "_1.jsonl"
     env.SourcesHubRedeemerLastLog = logMemory
-    local info = {version = "v12", session = session, files = files}
+    local info = {version = "v13", session = session, files = files}
     env.SourcesHubRedeemerLogInfo = info
 
     function diagnostics.refresh()
@@ -243,7 +243,7 @@ do
         return ok, ok and "Copied RECENT MEMORY ONLY (max 500 entries / 1 MB); saved files may contain more." or tostring(err)
     end
 
-    audit("session_start", {version = "v12", file = logPath, file_logging = disk,
+    audit("session_start", {version = "v13", file = logPath, file_logging = disk,
         scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
         capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
         note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
@@ -390,13 +390,17 @@ local function clickButton(button)
     local activated = connectionList(button.Activated)
     local clicked = connectionList(button.MouseButton1Click)
     if activated and #activated > 0 then
-        return dispatchSignal(button.Activated, nil, 1)
+        return dispatchSignal(button.Activated, nil, 1), "Activated callback"
     end
-    if clicked and #clicked > 0 then return dispatchSignal(button.MouseButton1Click) end
+    if clicked and #clicked > 0 then
+        return dispatchSignal(button.MouseButton1Click), "MouseButton1Click callback"
+    end
     -- Physical input also handles UI libraries with centralized event listeners.
-    if virtualClick(button) then return true end
-    if not activated and not clicked then return dispatchSignal(button.MouseButton1Click) end
-    return false
+    if virtualClick(button) then return true, "VirtualInput click" end
+    if not activated and not clicked then
+        return dispatchSignal(button.MouseButton1Click), "MouseButton1Click fallback"
+    end
+    return false, "no usable click route"
 end
 local function visibleSubmitText(button)
     local texts = {}
@@ -504,8 +508,21 @@ local function typeAndSubmitCode(code, requestToken)
     if button then
         -- A focus change is not an Enter submission when a submit button exists.
         if focused then pcall(function() box:ReleaseFocus(false) end) end
-        audit("ui_submit_dispatch", {code = code, button = button:GetFullName(), generation = requestToken})
-        if clickButton(button) then return true, "Submit attempted; check the game's result." end
+        local active, interactable = true, true
+        pcall(function() active = button.Active end)
+        pcall(function() interactable = button.Interactable end)
+        if not active or not interactable then
+            boundBox, boundButton = nil, nil
+            audit("ui_submit_dispatch", {code = code, button = button:GetFullName(), generation = requestToken,
+                route = "blocked", dispatched = false, active = active, interactable = interactable})
+            return false, "Submit is disabled. Close/reopen the game's Codes panel, then CHECK UI."
+        end
+        local clicked, route = clickButton(button)
+        audit("ui_submit_dispatch", {code = code, button = button:GetFullName(), generation = requestToken,
+            route = route, dispatched = clicked == true, active = active, interactable = interactable})
+        if clicked then
+            return true, "Submit dispatched via " .. tostring(route) .. "; waiting for the game's response."
+        end
         return false, "Code filled. Click the game's redeem button manually." 
     end
     if focused then
@@ -620,7 +637,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB configurable submit + AI / v12"
+subLabel.Text = "SAB hardened submit + AI / v13"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -1034,14 +1051,37 @@ local function checkUi()
     local route = "virtual click (not tested)"
     if activated and #activated > 0 then route = "Activated callback"
     elseif clicked and #clicked > 0 then route = "MouseButton1Click callback" end
+    local active, interactable, textEditable = true, true, true
+    pcall(function() active = button.Active end)
+    pcall(function() interactable = button.Interactable end)
+    pcall(function() textEditable = box.TextEditable end)
     -- Diagnostics only: no focus, text change, signal firing or remote sending.
     print("[Sources Hub] CHECK UI - field: " .. box:GetFullName())
-    print("[Sources Hub] CHECK UI - button: " .. button:GetFullName() .. "; route: " .. route)
+    print("[Sources Hub] CHECK UI - button: " .. button:GetFullName() .. "; route: " .. route
+        .. "; active=" .. tostring(active) .. "; interactable=" .. tostring(interactable)
+        .. "; textEditable=" .. tostring(textEditable))
     local remoteCount, labelCount = 0, 0
-    for _ in pairs(state.remotes) do remoteCount = remoteCount + 1 end
-    for _ in pairs(state.labels) do labelCount = labelCount + 1 end
+    for remote in pairs(state.remotes) do
+        if remote.Parent and remote:IsDescendantOf(ReplicatedStorage) then remoteCount = remoteCount + 1 end
+    end
+    for label in pairs(state.labels) do
+        if label.Parent and label:IsDescendantOf(PlayerGui) then labelCount = labelCount + 1 end
+    end
     print("[Sources Hub] CHECK UI - announcement candidates: " .. remoteCount .. " remotes / " .. labelCount .. " labels")
-    setStatus("CHECK UI: field + Submit found. Route: " .. route .. ". This is not a server acceptance test.")
+    audit("ui_check", {field = box:GetFullName(), button = button:GetFullName(), route = route,
+        active = active, interactable = interactable, text_editable = textEditable,
+        remotes = remoteCount, labels = labelCount})
+    if not active or not interactable or not textEditable then
+        boundBox, boundButton = nil, nil
+        setStatus("CHECK UI FAILED: Codes field or Submit is disabled. Close/reopen Codes before starting.", true)
+        return false
+    end
+    if remoteCount + labelCount == 0 then
+        setStatus("CHECK UI FAILED: no announcement source found yet. Wait a few seconds and check again.", true)
+        return false
+    end
+    setStatus("CHECK UI READY: field + Submit usable. Route: " .. route
+        .. ". Sources: " .. remoteCount .. " remotes / " .. labelCount .. " labels.")
     return true
 end
 connect(checkButton.MouseButton1Click, checkUi)
@@ -1062,6 +1102,9 @@ local fragments, submissionQueue = {}, {}
 local delay, nextSubmitAt = 0.5, 0
 local lastCode = ""
 local recent = {}
+local pendingSubmissions = {}
+local beginPendingSubmission, failPendingSubmission, recordServerResult
+local lastRemoteSeenAt, lastGuiSeenAt, watchStartedAt
 local function updatePreview()
     previewBox.Text = lastCode
 end
@@ -1112,10 +1155,21 @@ local function toggleOption(key)
         setStatus("Finish or stop the current round before changing submission rules.", true)
         return
     end
-    submitOptions[key] = not submitOptions[key]
-    updateOptionButton(key)
+    local enable = not submitOptions[key]
+    -- A single client must have exactly one submission strategy. Combining
+    -- WAIT 2 + WAIT 4 submits an incomplete code first and can poison the
+    -- later full-code attempt with the game's cooldown.
+    if enable then
+        for optionKey in pairs(optionButtons) do
+            submitOptions[optionKey] = optionKey == key
+            updateOptionButton(optionKey)
+        end
+    else
+        submitOptions[key] = false
+        updateOptionButton(key)
+    end
     audit("submit_option_changed", {option = tostring(key), enabled = submitOptions[key], options = optionsSnapshot()})
-    setStatus("Active submission rules: " .. optionSummary())
+    setStatus("Active submission rule: " .. optionSummary() .. ". One rule per LDPlayer instance.")
 end
 connect(everyPartButton.MouseButton1Click, function() toggleOption("every") end)
 connect(wait2Button.MouseButton1Click, function() toggleOption(2) end)
@@ -1127,6 +1181,7 @@ local function advanceGeneration()
 end
 local function pauseScan(message)
     scanning, collecting, manualWatching = false, false, false
+    watchStartedAt = nil
     modeButton.Text = "RIDDLE ANSWER: OFF (CLICK TO START)"
     advanceGeneration()
     submissionQueue = {}
@@ -1152,8 +1207,13 @@ local function processBuffer()
                     audit("submission_start", {code = item.code, source = item.source, part = item.part,
                         generation = token, mode = manualWatching and "riddle" or "trigger", input_event = item.inputEventId,
                         delay = delay, submission_rule = item.reason})
+                    local pending = beginPendingSubmission({code = item.code, source = item.source,
+                        part = item.part, generation = token, inputEventId = item.inputEventId})
                     local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token)
                     if not callOk then message, submitted = tostring(submitted), false end
+                    pending.dispatched = submitted == true
+                    pending.dispatchDetail = message
+                    if not submitted then failPendingSubmission(pending, message) end
                     audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
                         attempted = submitted == true, detail = message, reward_confirmed = false,
                         cancelled = token ~= generation or not state.alive})
@@ -1177,7 +1237,7 @@ local function processBuffer()
                         if manualWatching then prefix = "Answer " .. item.part
                         elseif item.reason and item.reason:find("every_part", 1, true) then prefix = "Cumulative part " .. item.part
                         else prefix = "Selected " .. item.part .. "-part code" end
-                        setStatus(prefix .. ": submit attempted; " .. tail .. ".")
+                        setStatus(prefix .. ": dispatched; waiting for SERVER confirmation; " .. tail .. ".")
                     end
                 end
             end
@@ -1195,9 +1255,95 @@ local function cleanMessage(value)
     if type(value) ~= "string" then return nil end
     return value:gsub("<[^>]*>", ""):match("^%s*(.-)%s*$")
 end
+local function removePendingSubmission(pending)
+    for index, item in ipairs(pendingSubmissions) do
+        if item == pending then
+            table.remove(pendingSubmissions, index)
+            return true
+        end
+    end
+    return false
+end
+local function classifyServerResult(value)
+    local text = cleanMessage(value)
+    if not text or text == "" then return nil end
+    local lower = text:lower():gsub("%s+", " ")
+    if lower:find("invalid code", 1, true) then return "invalid", text end
+    if lower:find("sold out", 1, true) then return "sold_out", text end
+    if lower:find("please wait before trying to redeem", 1, true)
+        or lower:find("cooldown", 1, true) then return "cooldown", text end
+    if lower:find("already redeemed", 1, true)
+        or lower:find("already claimed", 1, true) then return "already_used", text end
+    if lower:find("successfully redeemed", 1, true)
+        or lower:find("code redeemed", 1, true)
+        or lower:find("redeemed successfully", 1, true) then return "accepted", text end
+    return nil
+end
+beginPendingSubmission = function(fields)
+    local pending = {
+        code = fields.code, source = fields.source, part = fields.part,
+        generation = fields.generation, inputEventId = fields.inputEventId,
+        startedAt = os.clock(), dispatched = false, resolved = false,
+    }
+    table.insert(pendingSubmissions, pending)
+    task.delay(5, function()
+        if not state.alive or pending.resolved or not removePendingSubmission(pending) then return end
+        pending.resolved = true
+        boundBox, boundButton = nil, nil
+        audit("server_result_timeout", {code = pending.code, source = pending.source,
+            part = pending.part, generation = pending.generation,
+            elapsed_since_start = os.clock() - pending.startedAt})
+        setStatus("NO SERVER RESPONSE for " .. tostring(pending.code)
+            .. ". Submit route may be stuck; reopen Codes or run CHECK UI.", true)
+    end)
+    return pending
+end
+failPendingSubmission = function(pending, detail)
+    if not pending then return end
+    pending.resolved = true
+    removePendingSubmission(pending)
+    audit("submission_dispatch_failed", {code = pending.code, detail = detail,
+        elapsed_since_start = os.clock() - pending.startedAt})
+end
+local resultRecent = {}
+recordServerResult = function(value, source, inputEventId)
+    local kind, text = classifyServerResult(value)
+    if not kind then return false end
+    local now = os.clock()
+    local previous = resultRecent[text]
+    if previous and previous.source ~= source and now - previous.time < 0.75 then return true end
+    resultRecent[text] = {source = source, time = now}
+    for key, entry in pairs(resultRecent) do
+        if now - entry.time > 3 then resultRecent[key] = nil end
+    end
+    local pending = pendingSubmissions[1]
+    if pending then
+        pending.resolved = true
+        removePendingSubmission(pending)
+    end
+    audit("server_submission_result", {result = kind, message = text, source = source,
+        input_event = inputEventId, code = pending and pending.code or nil,
+        matched_pending = pending ~= nil,
+        response_seconds = pending and (now - pending.startedAt) or nil})
+    if kind == "accepted" then
+        setStatus("SERVER ACCEPTED" .. (pending and (": " .. pending.code) or "."))
+    elseif kind == "sold_out" then
+        setStatus("SERVER: SOLD OUT" .. (pending and (" — " .. pending.code) or ""), true)
+    elseif kind == "invalid" then
+        setStatus("SERVER: INVALID CODE" .. (pending and (" — " .. pending.code) or ""), true)
+    elseif kind == "cooldown" then
+        setStatus("SERVER: COOLDOWN" .. (pending and (" — " .. pending.code) or ""), true)
+    else
+        setStatus("SERVER: " .. text .. (pending and (" — " .. pending.code) or ""), true)
+    end
+    return true
+end
 local function isTrigger(value)
     local message = cleanMessage(value)
     if not message then return false end
+    -- "This code is sold out" contains the words "code is", but it is a
+    -- server result, not the start of another capture round.
+    if classifyServerResult(message) then return false end
     message = message:lower()
     return message:find("%f[%a]use%s+code%f[%A]") ~= nil
         or message:find("%f[%a]code%s+is%f[%A]") ~= nil
@@ -1296,6 +1442,13 @@ local function payloadText(value, depth)
         if result then return result end
     end
     return payloadText(value[1], depth + 1)
+end
+local function primaryNotificationText(...)
+    -- SAB notification remotes use argument 1 for the visible message.
+    -- Later positional arguments are duration, sound, placement ("Top") and
+    -- colour metadata. Scanning those fields created WTopTop/TopTopTop codes.
+    if select("#", ...) < 1 then return nil end
+    return payloadText(select(1, ...), 0)
 end
 
 local function aiRequestFunction()
@@ -1460,15 +1613,15 @@ local function watchRemote(remote)
     if state.remotes[remote] or not isNotificationRemote(remote) then return end
     state.remotes[remote] = true
     connect(remote.OnClientEvent, function(...)
+        lastRemoteSeenAt = os.clock()
         -- Observation precedes text extraction and never feeds back into it.
         local remoteSource = "remote:" .. remote:GetFullName()
         local inputEventId = diagnostics.remote(remoteSource, scanning or aiAssistEnabled,
             aiAssistEnabled and "ai_riddle" or (manualWatching and "riddle" or "trigger"), ...)
-        if aiAssistEnabled then
-            for i = 1, select("#", ...) do
-                local aiText = payloadText(select(i, ...), 0)
-                if aiText then onAiAnnouncement(aiText, remoteSource, inputEventId) end
-            end
+        local primaryText = primaryNotificationText(...)
+        if primaryText then recordServerResult(primaryText, remoteSource, inputEventId) end
+        if aiAssistEnabled and primaryText then
+            onAiAnnouncement(primaryText, remoteSource, inputEventId)
         end
         if scanning and manualWatching then
             local answer, detail = extractExplicitAnswer(...)
@@ -1483,14 +1636,10 @@ local function watchRemote(remote)
             end
             return
         end
-        for i = 1, select("#", ...) do
-            local message = payloadText(select(i, ...), 0)
-            if message and (isTrigger(message) or normalizeMessage(message)) then
-                audit("remote_text_selected", {source = "remote:" .. remote:GetFullName(),
-                    input_event = inputEventId, argument = i, text = message})
-                onAnnouncement(message, remoteSource, false, inputEventId)
-                return
-            end
+        if primaryText and (isTrigger(primaryText) or normalizeMessage(primaryText)) then
+            audit("remote_text_selected", {source = remoteSource,
+                input_event = inputEventId, argument = 1, text = primaryText})
+            onAnnouncement(primaryText, remoteSource, false, inputEventId)
         end
     end)
     audit("source_attached", {source = "remote:" .. remote:GetFullName()})
@@ -1517,6 +1666,7 @@ local function watchLabel(label, fresh)
     local function capture()
         if labelState.pending and isVisibleChain(label) then
             labelState.pending = false
+            lastGuiSeenAt = os.clock()
             -- Text, Visible and parent visibility may all change for ONE label.
             -- Count that as one fragment rather than three separate messages.
             local now = os.clock()
@@ -1524,6 +1674,7 @@ local function watchLabel(label, fresh)
             lastText, lastTime = label.Text, now
             local inputEventId = diagnostics.gui(label, "visible_delivery", true, now)
             local guiSource = "gui:" .. label:GetFullName()
+            recordServerResult(label.Text, guiSource, inputEventId)
             onAiAnnouncement(label.Text, guiSource, inputEventId)
             onAnnouncement(label.Text, guiSource, false, inputEventId)
         end
@@ -1562,8 +1713,12 @@ local function refreshSources()
 end
 local function sourceSummary()
     local remoteCount, labelCount = 0, 0
-    for _ in pairs(state.remotes) do remoteCount = remoteCount + 1 end
-    for _ in pairs(state.labels) do labelCount = labelCount + 1 end
+    for remote in pairs(state.remotes) do
+        if remote.Parent and remote:IsDescendantOf(ReplicatedStorage) then remoteCount = remoteCount + 1 end
+    end
+    for label in pairs(state.labels) do
+        if label.Parent and label:IsDescendantOf(PlayerGui) then labelCount = labelCount + 1 end
+    end
     return remoteCount, labelCount
 end
 connect(pairBox.FocusLost, function()
@@ -1593,8 +1748,10 @@ connect(aiButton.MouseButton1Click, function()
 end)
 connect(modeButton.MouseButton1Click, function()
     local enable = not manualWatching
+    if enable and not checkUi() then return end
     advanceGeneration()
     scanning, manualWatching, collecting = enable, enable, false
+    watchStartedAt = enable and os.clock() or nil
     fragments, submissionQueue, recent = {}, {}, {}
     manualCount = 0
     submittedAnswers = {}
@@ -1605,16 +1762,21 @@ connect(modeButton.MouseButton1Click, function()
     if enable then
         lastCode = ""
         updatePreview()
+        audit("watch_started", {mode = "riddle", options = optionsSnapshot(), started_at = watchStartedAt})
         setStatus("RIDDLE ANSWER: waiting for an explicit answer/solution/code field in notification data. Question text is ignored.")
     else
-        setStatus("Manual watch stopped. Pending submissions cancelled.")
+        audit("watch_stopped", {mode = "riddle", pending_submissions = #pendingSubmissions})
+        setStatus("Manual watch stopped. Any in-flight server response will still be logged.")
     end
 end)
 connect(scanButton.MouseButton1Click, function()
+    local enable = not scanning
+    if enable and not checkUi() then return end
     manualWatching = false
     modeButton.Text = "RIDDLE ANSWER: OFF (CLICK TO START)"
     for _, labelState in pairs(state.labels) do labelState.pending = false end
-    scanning = not scanning
+    scanning = enable
+    watchStartedAt = enable and os.clock() or nil
     advanceGeneration()
     collecting = false
     fragments, submissionQueue, recent = {}, {}, {}
@@ -1625,11 +1787,14 @@ connect(scanButton.MouseButton1Click, function()
         scanButton.BackgroundColor3 = Color3.fromRGB(120, 220, 140)
         statusDot.BackgroundColor3 = Color3.fromRGB(50, 200, 80)
         local remoteCount, labelCount = sourceSummary()
+        audit("watch_started", {mode = "trigger", options = optionsSnapshot(), started_at = watchStartedAt,
+            remotes = remoteCount, labels = labelCount})
         setStatus("Waiting for USE CODE / CODE IS. Rules: " .. optionSummary() .. ". Sources: " .. remoteCount .. " remotes / " .. labelCount .. " UI labels", remoteCount + labelCount == 0)
     else
         scanButton.Text = "START SCAN"
         scanButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
         statusDot.BackgroundColor3 = Color3.fromRGB(220, 40, 50)
+        audit("watch_stopped", {mode = "trigger", pending_submissions = #pendingSubmissions})
         setStatus("Stopped. Last code kept for manual redeem.")
     end
 end)
@@ -1640,14 +1805,22 @@ local function manualRedeem()
     busy = true
     lastCode = code
     audit("submission_start", {code = code, source = "manual", mode = "manual"})
-    local ok, submitted, message = pcall(typeAndSubmitCode, code)
-    audit("submission_result", {code = code, source = "manual", attempted = ok and submitted == true,
-        detail = ok and message or tostring(submitted), reward_confirmed = false})
+    local pending = beginPendingSubmission({code = code, source = "manual", generation = generation})
+    local callOk, submitted, message = pcall(typeAndSubmitCode, code)
+    if not callOk then message, submitted = tostring(submitted), false end
+    pending.dispatched = submitted == true
+    pending.dispatchDetail = message
+    if not submitted then failPendingSubmission(pending, message) end
+    audit("submission_result", {code = code, source = "manual", attempted = submitted == true,
+        detail = message, reward_confirmed = false})
     nextSubmitAt = os.clock() + delay
     busy = false
     if state.alive then
-        if ok then setStatus(message, not submitted)
-        else setStatus("Submit error: " .. tostring(submitted), true) end
+        if submitted and not pending.resolved then
+            setStatus("Manual code dispatched; waiting for SERVER confirmation: " .. code)
+        elseif not submitted then
+            setStatus("Manual submit failed: " .. tostring(message), true)
+        end
     end
     if scanning and #submissionQueue > 0 then task.defer(processBuffer) end
 end
@@ -1658,10 +1831,25 @@ connect(screenGui.Destroying, state.cleanup)
 connect(UserInputService.InputChanged, function(input)
     if input == dragInput and dragging then update(input) end
 end)
+local lastHealthAudit = -math.huge
 task.spawn(function()
     while state.alive do
         local ok, err = pcall(refreshSources)
         if not ok then warn("[Sources Hub] Source discovery: " .. tostring(err)) end
+        local now = os.clock()
+        if scanning and now - lastHealthAudit >= 15 then
+            local remoteCount, labelCount = sourceSummary()
+            audit("watch_health", {mode = manualWatching and "riddle" or "trigger",
+                watch_seconds = watchStartedAt and (now - watchStartedAt) or 0,
+                remotes = remoteCount, labels = labelCount, pending_submissions = #pendingSubmissions,
+                seconds_since_remote = lastRemoteSeenAt and (now - lastRemoteSeenAt) or -1,
+                seconds_since_gui = lastGuiSeenAt and (now - lastGuiSeenAt) or -1,
+                collecting = collecting, queued = #submissionQueue, busy = busy})
+            lastHealthAudit = now
+            if remoteCount + labelCount == 0 then
+                pauseScan("WATCH STOPPED: all announcement sources disappeared. Rejoin and run CHECK UI.")
+            end
+        end
         task.wait(3)
     end
 end)
@@ -1672,4 +1860,4 @@ if type(identifyexecutor) == "function" then
 end
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready. Code scan is unchanged. AI RIDDLE ASSIST adds preview-only suggestions.")
+setStatus("Ready v13. Open Codes, choose ONE rule, run CHECK UI, then START SCAN. Server responses are tracked.")
