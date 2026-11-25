@@ -1,4 +1,4 @@
--- Sources Hub Redeemer - compact panel and client-side result logging, 2026-11-22 (v18).
+-- Sources Hub Redeemer - compact panel and client-side result logging, 2026-11-25 (v19).
 -- Submits through the existing game UI. A submission is NOT a confirmed reward.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -48,12 +48,10 @@ local logLabel
 local logMemory = {}
 local logPath
 
--- Optimized refreshLogLabel function
 local function refreshLogLabel()
     if diagnostics.refresh then diagnostics.refresh() end
 end
 
--- Optimized audit function
 local function audit(event, fields, at)
     if diagnostics.record then return diagnostics.record(event, fields, at) end
 end
@@ -72,7 +70,7 @@ do
     local flushing = false
     logPath = base .. "_1.jsonl"
     env.SourcesHubRedeemerLastLog = logMemory
-    local info = {version = "v18", session = session, files = files}
+    local info = {version = "v19", session = session, files = files}
     env.SourcesHubRedeemerLogInfo = info
 
     function diagnostics.refresh()
@@ -95,7 +93,6 @@ do
             local record = {schema = 2, utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
                 elapsed = now - start, session = session, sequence = sequence,
                 event = event, data = fields or {}}
-            -- Bound pending memory even when incoming messages outrun disk writes.
             local estimate = event == "remote_received" and 65536 or 8192
             if #pending >= 512 or pendingBytes + estimate > 2097152 then
                 dropped, pendingDropped = dropped + 1, pendingDropped + 1
@@ -196,7 +193,6 @@ do
         return ok and disk
     end
 
-    -- Snapshot typed parameters before message selection, with explicit cut markers.
     function diagnostics.snapshot(...)
         local seen, nodes, entries, stringBytes = {}, 0, 0, 0
         local cuts = {}
@@ -254,11 +250,10 @@ do
         return result
     end
 
-    function diagnostics.remote(source, active, mode, ...)
-        local at = os.clock()
+    function diagnostics.remote(source, active, mode, at, ...)
         local ok, snapshot = pcall(diagnostics.snapshot, ...)
         return audit("remote_received", {source = source, scan_active = active, mode = mode,
-            payload = ok and snapshot or {snapshot_error = tostring(snapshot)}}, at)
+            payload = ok and snapshot or {snapshot_error = tostring(snapshot)}}, at or os.clock())
     end
     function diagnostics.gui(label, reason, visible, at)
         local ok, snapshot = pcall(diagnostics.snapshot, label.Text)
@@ -295,7 +290,7 @@ do
         return ok, ok and ("Copied RECENT MEMORY ONLY (max 500 entries / 1 MB)." .. note) or tostring(err)
     end
 
-    audit("session_start", {version = "v18", file = logPath, file_logging = disk,
+    audit("session_start", {version = "v19", file = logPath, file_logging = disk,
         scope = "Already selected notification remotes and announcement GUI labels only; no history or server storage.",
         capture = "All event arguments before selection, including unknown fields; bounded snapshots with cut markers.",
         note = "Elapsed seconds are monotonic receipt/attempt times; attempts do not confirm server acceptance.",
@@ -346,7 +341,6 @@ end
 local getconns = getconnections or (debug and debug.getconnections)
 local setStatus = function(message) print("[Sources Hub] " .. message) end
 
--- Optimized UI element detection functions
 local function isOurGui(instance)
     local current = instance
     while current do
@@ -380,7 +374,6 @@ local function codeContext(instance)
     return false
 end
 
--- Optimized UI element finding
 local boundBox, boundButton, boundFastSignal, boundFastRoute
 local lastUiError
 local cachedCodeBox
@@ -437,7 +430,6 @@ local function findCodeBox(forceRefresh)
     return best
 end
 
--- Optimized connection list function
 local function connectionList(signal)
     if type(getconns) ~= "function" then return nil end
     local ok, result = pcall(getconns, signal)
@@ -445,7 +437,6 @@ local function connectionList(signal)
     return nil
 end
 
--- Optimized signal dispatching
 local function dispatchSignal(signal, ...)
     local listeners = connectionList(signal)
     if listeners and #listeners == 0 then return false end
@@ -468,7 +459,6 @@ local function dispatchSignal(signal, ...)
     return false
 end
 
--- Optimized virtual click implementation
 local function virtualClick(button)
     if not isVisibleChain(button) or button.AbsoluteSize.X <= 0 or button.AbsoluteSize.Y <= 0 then return false end
     local ok = pcall(function()
@@ -485,7 +475,6 @@ local function virtualClick(button)
     return ok
 end
 
--- Optimized button click handling
 local function clickButton(button)
     local activated = connectionList(button.Activated)
     local clicked = connectionList(button.MouseButton1Click)
@@ -502,7 +491,6 @@ local function clickButton(button)
     return false, "no usable click route"
 end
 
--- Optimized text extraction for submit buttons
 local function visibleSubmitText(button)
     local texts = {}
     local function add(item)
@@ -525,7 +513,6 @@ local function visibleSubmitText(button)
     return texts
 end
 
--- Optimized submit button scoring
 local function submitScore(button)
     local name = button.Name:lower()
     if name:find("close", 1, true) or name == "x" or name:find("cancel", 1, true) then return 0 end
@@ -541,7 +528,6 @@ local function submitScore(button)
     return 0
 end
 
--- Optimized submit button finding with caching
 local function findSubmitButton(box)
     lastUiError = nil
 
@@ -571,7 +557,6 @@ local function findSubmitButton(box)
     lastUiError = "CHECK UI: Submit not identified. Field: " .. box:GetFullName()
 end
 
--- Optimized code panel opening
 local function openCodesPanel()
     for _, child in ipairs(PlayerGui:GetDescendants()) do
         if child:IsA("GuiButton") and not isOurGui(child) and isVisibleChain(child) then
@@ -584,14 +569,16 @@ local function openCodesPanel()
     return false
 end
 
--- Optimized code submission with caching and error recovery
+-- Ultra-fast code submission with caching and error recovery
 local function typeAndSubmitCode(code, requestToken, beforeDispatch)
     local localStartedAt = os.clock()
     local function cancelled()
         return not state.alive or (requestToken ~= nil and requestToken ~= state.captureGeneration)
     end
     if cancelled() then return false, "Cancelled: a new capture round started." end
-    local box = findCodeBox()
+
+    -- Fast path check before any expensive descendant scans
+    local box = (usableGui(boundBox) and boundBox) or findCodeBox()
     if not box then
         openCodesPanel()
         local deadline = os.clock() + 2
@@ -672,7 +659,6 @@ local function typeAndSubmitCode(code, requestToken, beforeDispatch)
     return false, "Code filled. Press Enter in the game's code field manually."
 end
 
--- Optimized callback source detection
 local function callbackSource(fn)
     if type(fn) ~= "function" then return "" end
     if debug and type(debug.getinfo) == "function" then
@@ -690,7 +676,6 @@ local function callbackSource(fn)
     return ""
 end
 
--- Optimized notification remote detection
 local function isNotificationRemote(remote)
     if not remote:IsA("RemoteEvent") then return false end
     if remote == env.PhiNotifyRemote or remote == _G.PhiNotifyRemote then return true end
@@ -709,7 +694,7 @@ local function isNotificationRemote(remote)
     return false
 end
 
--- GUI creation and setup (optimized)
+-- GUI creation and setup
 if PlayerGui:FindFirstChild("SourcesHubRedeemerGui") then
     PlayerGui.SourcesHubRedeemerGui:Destroy()
 end
@@ -725,7 +710,6 @@ local BASE_W, BASE_H = 310, 424
 local COLLAPSED_H = 44
 local collapsed = false
 
--- Main Container (Translucent White)
 local mainFrame = Instance.new("ImageLabel")
 mainFrame.Name = "MainFrame"
 mainFrame.Size = UDim2.new(0, BASE_W, 0, BASE_H)
@@ -782,7 +766,6 @@ mainStroke.Thickness = 1.5
 mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 mainStroke.Parent = mainFrame
 
--- Top Bar Header
 local topBar = Instance.new("Frame")
 topBar.Name = "TopBar"
 topBar.Size = UDim2.new(1, 0, 0, 44)
@@ -814,7 +797,7 @@ subLabel.Size = UDim2.new(0, 200, 0, 12)
 subLabel.Position = UDim2.new(0, 12, 0, 25)
 subLabel.BackgroundTransparency = 1
 subLabel.Font = Enum.Font.Gotham
-subLabel.Text = "SAB / v18 Compact"
+subLabel.Text = "SAB / v19 Compact"
 subLabel.TextColor3 = Color3.fromRGB(120, 30, 35)
 subLabel.TextSize = 10
 subLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -851,7 +834,6 @@ local dotCorner = Instance.new("UICorner")
 dotCorner.CornerRadius = UDim.new(1, 0)
 dotCorner.Parent = statusDot
 
--- Start Scan Button
 local scanButton = Instance.new("TextButton")
 scanButton.Name = "ScanButton"
 scanButton.Size = UDim2.new(1, -24, 0, 30)
@@ -875,7 +857,6 @@ scanStroke.Color = Color3.fromRGB(255, 255, 255)
 scanStroke.Thickness = 1
 scanStroke.Parent = scanButton
 
--- Optimized toggle row creation with minimal allocations
 local function createToggleRow(name, labelText, y, enabled)
     local row = Instance.new("Frame")
     row.Name = name .. "Row"
@@ -925,7 +906,6 @@ local wait2Button = createToggleRow("Wait2", "WAIT FOR 2 PARTS", 116, false)
 local wait3Button = createToggleRow("Wait3", "WAIT FOR 3 PARTS", 144, true)
 local wait4Button = createToggleRow("Wait4", "WAIT FOR 4 PARTS", 172, false)
 
--- Preview Code Textbox
 local previewBox = Instance.new("TextBox")
 previewBox.Name = "PreviewBox"
 previewBox.Size = UDim2.new(1, -102, 0, 30)
@@ -957,7 +937,6 @@ pad.PaddingLeft = UDim.new(0, 8)
 pad.PaddingRight = UDim.new(0, 8)
 pad.Parent = previewBox
 
--- Redeem Pill Button
 local redeemButton = Instance.new("TextButton")
 redeemButton.Name = "RedeemButton"
 redeemButton.Size = UDim2.new(0, 70, 0, 30)
@@ -980,7 +959,6 @@ redeemStroke.Color = Color3.fromRGB(255, 255, 255)
 redeemStroke.Thickness = 1
 redeemStroke.Parent = redeemButton
 
--- Bottom Controls Row
 local bottomRow = Instance.new("Frame")
 bottomRow.Name = "BottomRow"
 bottomRow.Size = UDim2.new(1, -24, 0, 30)
@@ -1048,7 +1026,6 @@ setStroke.Parent = setButton
 
 local scanning = false
 
--- Hover Animations - managed cleanly via state.connections
 local function applyScanHoverEffect(button)
     local hoverColor = Color3.fromRGB(255, 255, 255)
     local activeColor = Color3.fromRGB(120, 220, 140)
@@ -1078,7 +1055,6 @@ end
 whiteHover(setButton)
 whiteHover(redeemButton)
 
--- Mobile & PC Smooth Dragging Mechanics - clamped inside viewport & leak-free
 local dragging, dragInput, dragStart, startPos
 local function update(input)
     local vp = screenGui.AbsoluteSize
@@ -1118,7 +1094,6 @@ end)
 connect(screenGui:GetPropertyChangedSignal("AbsoluteSize"), syncLayout)
 syncLayout()
 
--- Status label with optimized error handling
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Name = "Status"
 statusLabel.Position = UDim2.new(0, 12, 0, 320)
@@ -1154,7 +1129,6 @@ connect(logLabel.MouseButton1Click, function()
     setStatus(message, not ok)
 end)
 
--- Check UI button with optimized implementation
 local checkButton = Instance.new("TextButton")
 checkButton.Name = "CheckUI"
 checkButton.Position = UDim2.new(0, 12, 0, 278)
@@ -1193,7 +1167,6 @@ connect(collapseButton.MouseButton1Click, function()
     setPanelCollapsed(not collapsed)
 end)
 
--- Optimized UI checking function with caching
 local function checkUi()
     invalidateUiBindings()
     local box = findCodeBox(true)
@@ -1253,7 +1226,6 @@ end
 
 connect(checkButton.MouseButton1Click, checkUi)
 
--- Optimized state and control variables
 local busy, processing = false, false
 local generation = 0
 state.captureGeneration = generation
@@ -1283,12 +1255,10 @@ end
 
 local cachedCeiling = computeCeiling()
 
--- Optimized preview update with minimal allocations
 local function updatePreview()
     previewBox.Text = lastCode
 end
 
--- Optimized delay update function
 local function updateDelay()
     local raw = delayBox.Text:gsub(",", ".")
     local value = tonumber(raw)
@@ -1305,13 +1275,11 @@ end
 connect(delayBox.FocusLost, function() updateDelay() end)
 connect(setButton.MouseButton1Click, updateDelay)
 
--- Optimized options snapshot with minimal allocations
 local function optionsSnapshot()
     return {every_part = submitOptions.every, wait_2 = submitOptions[2],
         wait_3 = submitOptions[3], wait_4 = submitOptions[4]}
 end
 
--- Optimized option summary
 local function optionSummary()
     local active = {}
     if submitOptions.every then active[#active + 1] = "EVERY PART" end
@@ -1321,12 +1289,6 @@ local function optionSummary()
     return #active > 0 and table.concat(active, " + ") or "NONE (PREVIEW ONLY)"
 end
 
--- Optimized target ceiling lookup
-local function targetCeiling()
-    return cachedCeiling
-end
-
--- Optimized submission reason calculation
 local function submissionReason(part)
     local reasons = {}
     if submitOptions.every then reasons[#reasons + 1] = "every_part" end
@@ -1334,14 +1296,12 @@ local function submissionReason(part)
     return #reasons > 0 and table.concat(reasons, "+") or nil
 end
 
--- Optimized option button update with minimal allocations
 local function updateOptionButton(key)
     local button, enabled = optionButtons[key], submitOptions[key]
     button.Text = enabled and "ON" or "OFF"
     button.BackgroundColor3 = enabled and Color3.fromRGB(70, 190, 100) or Color3.fromRGB(210, 70, 75)
 end
 
--- Optimized option toggle
 local function toggleOption(key)
     if collecting then
         setStatus("Finish or stop the current round before changing submission rules.", true)
@@ -1371,13 +1331,11 @@ connect(wait2Button.MouseButton1Click, function() toggleOption(2) end)
 connect(wait3Button.MouseButton1Click, function() toggleOption(3) end)
 connect(wait4Button.MouseButton1Click, function() toggleOption(4) end)
 
--- Optimized generation advancement
 local function advanceGeneration()
     generation = generation + 1
     state.captureGeneration = generation
 end
 
--- Optimized pause scan with minimal allocations
 local function pauseScan(message)
     scanning, collecting = false, false
     watchStartedAt = nil
@@ -1390,7 +1348,44 @@ local function pauseScan(message)
     setStatus(message, true)
 end
 
--- Optimized processing buffer with minimal allocations
+-- Shared synchronous submission executor (used by both immediate hot-path and queue)
+local function executeSubmission(item, token)
+    if item.generation ~= token or not state.alive or not scanning then return true end
+    busy = true
+    local pending = beginPendingSubmission({code = item.code, source = item.source,
+        part = item.part, generation = token, inputEventId = item.inputEventId})
+    local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token, pending.beforeDispatch)
+    if not callOk then
+        message, submitted = "Submit runtime error: " .. tostring(submitted), false
+        invalidateUiBindings()
+    end
+    pending.dispatched = submitted == true
+    pending.dispatchDetail = message
+    if not submitted then failPendingSubmission(pending, message) end
+    audit("submission_start", {code = item.code, source = item.source, part = item.part,
+        generation = token, mode = "trigger", input_event = item.inputEventId,
+        delay = delay, submission_rule = item.reason})
+    audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
+        attempted = submitted == true, detail = message, reward_confirmed = false,
+        cancelled = token ~= generation or not state.alive})
+    busy = false
+    if not state.alive or token ~= generation then return false end
+    if not submitted then
+        updatePreview()
+        pauseScan(message)
+        return false
+    end
+    nextSubmitAt = os.clock() + delay
+    if submitted and not pending.resolved then
+        local tail = collecting and "waiting for next part" or "waiting for USE CODE / CODE IS"
+        local prefix
+        if item.reason and item.reason:find("every_part", 1, true) then prefix = "Cumulative part " .. item.part
+        else prefix = "Selected " .. item.part .. "-part code" end
+        setStatus(prefix .. ": dispatched; waiting for SERVER confirmation; " .. tail .. ".")
+    end
+    return true
+end
+
 local function processBuffer()
     if processing or not scanning or not state.alive then return end
     processing = true
@@ -1403,40 +1398,7 @@ local function processBuffer()
                 task.wait(waitTime)
             else
                 local item = table.remove(submissionQueue, 1)
-                if item.generation == token then
-                    busy = true
-                    audit("submission_start", {code = item.code, source = item.source, part = item.part,
-                        generation = token, mode = "trigger", input_event = item.inputEventId,
-                        delay = delay, submission_rule = item.reason})
-                    local pending = beginPendingSubmission({code = item.code, source = item.source,
-                        part = item.part, generation = token, inputEventId = item.inputEventId})
-                    local callOk, submitted, message = pcall(typeAndSubmitCode, item.code, token, pending.beforeDispatch)
-                    if not callOk then
-                        message, submitted = "Submit runtime error: " .. tostring(submitted), false
-                        invalidateUiBindings()
-                    end
-                    pending.dispatched = submitted == true
-                    pending.dispatchDetail = message
-                    if not submitted then failPendingSubmission(pending, message) end
-                    audit("submission_result", {code = item.code, source = item.source, input_event = item.inputEventId, generation = token,
-                        attempted = submitted == true, detail = message, reward_confirmed = false,
-                        cancelled = token ~= generation or not state.alive})
-                    busy = false
-                    if not state.alive or token ~= generation then break end
-                    if not submitted then
-                        updatePreview()
-                        pauseScan(message)
-                        break
-                    end
-                    nextSubmitAt = os.clock() + delay
-                    if submitted and not pending.resolved then
-                        local tail = collecting and "waiting for next part" or "waiting for USE CODE / CODE IS"
-                        local prefix
-                        if item.reason and item.reason:find("every_part", 1, true) then prefix = "Cumulative part " .. item.part
-                        else prefix = "Selected " .. item.part .. "-part code" end
-                        setStatus(prefix .. ": dispatched; waiting for SERVER confirmation; " .. tail .. ".")
-                    end
-                end
+                if not executeSubmission(item, token) then break end
             end
         end
     end)
@@ -1450,13 +1412,11 @@ local function processBuffer()
     end
 end
 
--- Optimized message cleaning
 local function cleanMessage(value)
     if type(value) ~= "string" then return nil end
     return value:gsub("<[^>]*>", ""):match("^%s*(.-)%s*$")
 end
 
--- Optimized pending submission removal
 local function removePendingSubmission(pending)
     for index, item in ipairs(pendingSubmissions) do
         if item == pending then
@@ -1467,7 +1427,6 @@ local function removePendingSubmission(pending)
     return false
 end
 
--- Optimized server result classification
 local function classifyServerResult(value)
     local text = cleanMessage(value)
     if not text or text == "" then return nil end
@@ -1484,7 +1443,6 @@ local function classifyServerResult(value)
     return nil
 end
 
--- Optimized beginPendingSubmission with minimal allocations
 beginPendingSubmission = function(fields)
     local pending = {
         code = fields.code, source = fields.source, part = fields.part,
@@ -1518,7 +1476,6 @@ beginPendingSubmission = function(fields)
     return pending
 end
 
--- Optimized failPendingSubmission with minimal allocations
 failPendingSubmission = function(pending, detail)
     if not pending then return end
     pending.resolved = true
@@ -1528,7 +1485,6 @@ failPendingSubmission = function(pending, detail)
         elapsed_since_start = os.clock() - pending.startedAt})
 end
 
--- Optimized server result recording with minimal allocations
 recordServerResult = function(value, source, inputEventId)
     local kind, text = classifyServerResult(value)
     if not kind then return false end
@@ -1564,7 +1520,7 @@ local function isLikelyNonCodeNotice(message)
     return lower == "code" or lower == "codes" or lower == "redeem" or lower == "invalid"
 end
 
--- Fast & reliable announcement handling
+-- Ultra-low-latency hot-path announcement handling
 local function onAnnouncement(value, source, inputEventId)
     if not scanning or not state.alive then return end
 
@@ -1592,23 +1548,11 @@ local function onAnnouncement(value, source, inputEventId)
         message = normalized
     end
 
-    audit("capture_input", {
-        source = source,
-        text = value,
-        explicit_answer = false,
-        input_event = inputEventId,
-        generation = generation
-    })
-
     local now = os.clock()
     local dedupKey = (trigger and "trg:" or "prt:") .. message
     local previous = recent[dedupKey]
     if previous and previous.source ~= source and now - previous.time < 0.75 then
-        audit("duplicate_ignored", {
-            source = source,
-            text = message,
-            previous_source = previous.source
-        })
+        audit("duplicate_ignored", {source = source, text = message, previous_source = previous.source})
         return
     end
     recent[dedupKey] = {source = source, time = now}
@@ -1617,7 +1561,6 @@ local function onAnnouncement(value, source, inputEventId)
     end
 
     if trigger then
-        audit("trigger_received", {source = source, text = message, options = optionsSnapshot()})
         advanceGeneration()
         collecting = true
         fragments, submissionQueue = {}, {}
@@ -1627,6 +1570,8 @@ local function onAnnouncement(value, source, inputEventId)
         local ceiling = cachedCeiling
         local labelLimit = submitOptions.every and ("MAX " .. ceiling) or tostring(ceiling)
         scanButton.Text = ceiling > 0 and ("COLLECTING: 0 / " .. labelLimit) or "COLLECTING (PREVIEW)"
+        audit("capture_input", {source = source, text = value, explicit_answer = false, input_event = inputEventId, generation = generation})
+        audit("trigger_received", {source = source, text = message, options = optionsSnapshot()})
         setStatus("Trigger seen. Active rules: " .. optionSummary())
         print("[Sources Hub] New round: " .. message)
         return
@@ -1643,45 +1588,12 @@ local function onAnnouncement(value, source, inputEventId)
     table.insert(fragments, message)
     local part = #fragments
     lastCode = nextCandidate
-    updatePreview()
 
     local ceiling = cachedCeiling
     local reason = submissionReason(part)
-    audit("part_captured", {
-        source = source,
-        fragment = message,
-        code = lastCode,
-        part = part,
-        options = optionsSnapshot(),
-        queued = reason ~= nil,
-        submission_rule = reason,
-        input_event = inputEventId,
-        generation = generation
-    })
-    print("[Sources Hub] Part " .. part .. " (" .. source .. "): " .. message .. " -> " .. lastCode)
-
-    if reason then
-        table.insert(submissionQueue, {
-            code = lastCode,
-            part = part,
-            generation = generation,
-            source = source,
-            inputEventId = inputEventId,
-            reason = reason
-        })
-        audit("code_queued", {
-            source = source,
-            fragment = message,
-            code = lastCode,
-            part = part,
-            options = optionsSnapshot(),
-            submission_rule = reason,
-            input_event = inputEventId,
-            generation = generation
-        })
-    end
-
+    local token = generation
     local labelLimit = submitOptions.every and ("MAX " .. ceiling) or tostring(ceiling)
+
     if ceiling > 0 and part >= ceiling then
         collecting = false
         scanButton.Text = "WAITING FOR TRIGGER"
@@ -1691,15 +1603,50 @@ local function onAnnouncement(value, source, inputEventId)
         scanButton.Text = "COLLECTING: " .. part
     end
 
+    -- HOT PATH: dispatch immediately BEFORE any audit/print/UI work
+    local dispatchedImmediately = false
     if reason then
+        local item = {
+            code = lastCode,
+            part = part,
+            generation = token,
+            source = source,
+            inputEventId = inputEventId,
+            reason = reason
+        }
+        if not busy and #submissionQueue == 0 and now >= nextSubmitAt then
+            dispatchedImmediately = true
+            executeSubmission(item, token)
+        else
+            table.insert(submissionQueue, item)
+            task.defer(processBuffer)
+        end
+    end
+
+    -- Post-dispatch UI & diagnostic logging
+    updatePreview()
+    audit("capture_input", {source = source, text = value, explicit_answer = false, input_event = inputEventId, generation = token})
+    audit("part_captured", {
+        source = source,
+        fragment = message,
+        code = lastCode,
+        part = part,
+        options = optionsSnapshot(),
+        queued = reason ~= nil,
+        immediate = dispatchedImmediately,
+        submission_rule = reason,
+        input_event = inputEventId,
+        generation = token
+    })
+    print("[Sources Hub] Part " .. part .. " (" .. source .. "): " .. message .. " -> " .. lastCode)
+
+    if reason and not dispatchedImmediately then
         setStatus("Captured part " .. part .. (ceiling > 0 and (" / " .. labelLimit) or "") .. ". Queued by " .. reason .. ": " .. lastCode)
-        task.defer(processBuffer)
-    else
+    elseif not reason then
         setStatus("Captured part " .. part .. (ceiling > 0 and (" / " .. labelLimit) or "") .. ": " .. lastCode .. ". No matching submit rule.")
     end
 end
 
--- Optimized payload text extraction with minimal allocations
 local function payloadText(value, depth)
     if type(value) == "string" then return value end
     if type(value) ~= "table" or depth > 3 then return nil end
@@ -1710,33 +1657,34 @@ local function payloadText(value, depth)
     return payloadText(value[1], depth + 1)
 end
 
--- Optimized primary notification text extraction
 local function primaryNotificationText(...)
     if select("#", ...) < 1 then return nil end
     return payloadText(select(1, ...), 0)
 end
 
--- Optimized remote watching with clean per-remote disconnect tracking
 local function watchRemote(remote)
     if not state.alive then return end
     if state.remotes[remote] or not isNotificationRemote(remote) then return end
+    local remoteSource = "remote:" .. remote:GetFullName()
     local conn = remote.OnClientEvent:Connect(function(...)
         if not state.alive or not state.remotes[remote] then return end
-        lastRemoteSeenAt = os.clock()
-        local remoteSource = "remote:" .. remote:GetFullName()
-        local inputEventId = diagnostics.remote(remoteSource, scanning, "trigger", ...)
+        local receivedAt = os.clock()
+        lastRemoteSeenAt = receivedAt
         local primaryText = primaryNotificationText(...)
-        if primaryText then recordServerResult(primaryText, remoteSource, inputEventId) end
+        -- Run hot-path announcement FIRST before heavy diagnostic snapshot
         if primaryText then
-            onAnnouncement(primaryText, remoteSource, inputEventId)
+            onAnnouncement(primaryText, remoteSource, nil)
+        end
+        local inputEventId = diagnostics.remote(remoteSource, scanning, "trigger", receivedAt, ...)
+        if primaryText then
+            recordServerResult(primaryText, remoteSource, inputEventId)
         end
     end)
     state.remotes[remote] = conn
-    audit("source_attached", {source = "remote:" .. remote:GetFullName()})
+    audit("source_attached", {source = remoteSource})
     print("[Sources Hub] Listening: " .. remote:GetFullName())
 end
 
--- Optimized announcement context checking
 local function announcementContext(instance)
     local current = instance
     while current and current ~= PlayerGui do
@@ -1748,7 +1696,6 @@ local function announcementContext(instance)
     return false
 end
 
--- Optimized label watching with clean per-label disconnect tracking
 local function watchLabel(label, fresh)
     if not state.alive then return end
     if not label:IsA("TextLabel") or isOurGui(label) or state.labels[label] then return end
@@ -1764,18 +1711,19 @@ local function watchLabel(label, fresh)
     state.labels[label] = labelState
     local lastText, lastTime = nil, -math.huge
     local wasVisible = isVisibleChain(label)
+    local guiSource = "gui:" .. label:GetFullName()
     local function capture()
         if not state.alive or state.labels[label] ~= labelState then return end
         if labelState.pending and isVisibleChain(label) then
             labelState.pending = false
-            lastGuiSeenAt = os.clock()
             local now = os.clock()
+            lastGuiSeenAt = now
             if label.Text == lastText and now - lastTime < 0.75 then return end
             lastText, lastTime = label.Text, now
+            local text = label.Text
+            onAnnouncement(text, guiSource, nil)
             local inputEventId = diagnostics.gui(label, "visible_delivery", true, now)
-            local guiSource = "gui:" .. label:GetFullName()
-            recordServerResult(label.Text, guiSource, inputEventId)
-            onAnnouncement(label.Text, guiSource, inputEventId)
+            recordServerResult(text, guiSource, inputEventId)
         end
     end
     local function visibilityChanged()
@@ -1808,7 +1756,6 @@ local function watchLabel(label, fresh)
     if fresh then task.defer(capture) end
 end
 
--- Optimized source discovery with leak-free cleanup on removal
 connect(ReplicatedStorage.DescendantAdded, function(child)
     if child:IsA("RemoteEvent") then task.defer(watchRemote, child) end
 end)
@@ -1839,12 +1786,10 @@ local function refreshSources()
     end
 end
 
--- Initial scan of existing PlayerGui labels once
 for _, child in ipairs(PlayerGui:GetDescendants()) do
     watchLabel(child, false)
 end
 
--- Optimized source summary with minimal allocations
 local function sourceSummary()
     local remoteCount, labelCount = 0, 0
     for remote in pairs(state.remotes) do
@@ -1856,7 +1801,6 @@ local function sourceSummary()
     return remoteCount, labelCount
 end
 
--- Optimized scan button click handler with minimal allocations
 connect(scanButton.MouseButton1Click, function()
     local enable = not scanning
     if enable and not checkUi() then return end
@@ -1889,7 +1833,6 @@ connect(scanButton.MouseButton1Click, function()
     end
 end)
 
--- Optimized manual redeem function with minimal allocations and error handling
 local function manualRedeem()
     if busy then setStatus("A submission is already in progress.", true); return end
     local code = previewBox.Text:match("^%s*(.-)%s*$")
@@ -1925,16 +1868,13 @@ end
 connect(redeemButton.MouseButton1Click, manualRedeem)
 connect(previewBox.FocusLost, function(enter) if enter then manualRedeem() end end)
 
--- Optimized cleanup connection
 connect(statusDot.MouseButton1Click, state.cleanup)
 connect(screenGui.Destroying, state.cleanup)
 
--- Optimized input handling with minimal allocations
 connect(UserInputService.InputChanged, function(input)
     if input == dragInput and dragging then update(input) end
 end)
 
--- Optimized health audit with minimal allocations
 local lastHealthAudit = -math.huge
 task.spawn(function()
     while state.alive do
@@ -1958,7 +1898,6 @@ task.spawn(function()
     end
 end)
 
--- Executor identification with minimal allocations
 local executorName = "unknown"
 if type(identifyexecutor) == "function" then
     local ok, name = pcall(identifyexecutor)
@@ -1967,4 +1906,4 @@ end
 
 print("[Sources Hub] Executor: " .. executorName .. "; getconnections=" .. tostring(type(getconns) == "function")
     .. "; firesignal=" .. tostring(type(firesignal) == "function"))
-setStatus("Ready v18 Compact. Open Codes, choose ONE rule, run CHECK UI, then START SCAN. Client notices are logged.")
+setStatus("Ready v19 Compact. Open Codes, choose ONE rule, run CHECK UI, then START SCAN. Client notices are logged.")
